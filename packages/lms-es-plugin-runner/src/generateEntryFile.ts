@@ -6,33 +6,44 @@ declare var process: any;
 // We receive runtime information in the environment variables.
 const clientIdentifier = process.env.LMS_PLUGIN_CLIENT_IDENTIFIER;
 const clientPasskey = process.env.LMS_PLUGIN_CLIENT_PASSKEY;
+const baseUrl = process.env.LMS_PLUGIN_BASE_URL;
 
 const client = new LMStudioClient({
   clientIdentifier,
   clientPasskey,
+  baseUrl,
 });
 
 (globalThis as any).__LMS_PLUGIN_CONTEXT = true;
 
-let generatorSet = false;
-let preprocessorSet = false;
+let predictionLoopHandlerSet = false;
+let promptPreprocessorSet = false;
 let configSchematicsSet = false;
+let globalConfigSchematicsSet = false;
+let toolsProviderSet = false;
+let generatorSet = false;
+
+const selfRegistrationHost = client.plugins.getSelfRegistrationHost();
 
 const pluginContext: PluginContext = {
-  withGenerator: (generate) => {
-    if (generatorSet) {
-      throw new Error("Generator already registered");
+  withPredictionLoopHandler: (generate) => {
+    if (predictionLoopHandlerSet) {
+      throw new Error("PredictionLoopHandler already registered");
     }
-    generatorSet = true;
-    client.plugins.setGenerator(generate);
+    if (toolsProviderSet) {
+      throw new Error("PredictionLoopHandler cannot be used with a tools provider");
+    }
+
+    predictionLoopHandlerSet = true;
+    selfRegistrationHost.setPredictionLoopHandler(generate);
     return pluginContext;
   },
-  withPreprocessor: (preprocess) => {
-    if (preprocessorSet) {
-      throw new Error("Preprocessor already registered");
+  withPromptPreprocessor: (preprocess) => {
+    if (promptPreprocessorSet) {
+      throw new Error("PromptPreprocessor already registered");
     }
-    preprocessorSet = true;
-    client.plugins.setPreprocessor(preprocess);
+    promptPreprocessorSet = true;
+    selfRegistrationHost.setPromptPreprocessor(preprocess);
     return pluginContext;
   },
   withConfigSchematics: (configSchematics) => {
@@ -40,7 +51,36 @@ const pluginContext: PluginContext = {
       throw new Error("Config schematics already registered");
     }
     configSchematicsSet = true;
-    client.plugins.setConfigSchematics(configSchematics);
+    selfRegistrationHost.setConfigSchematics(configSchematics);
+    return pluginContext;
+  },
+  withGlobalConfigSchematics: (globalConfigSchematics) => {
+    if (globalConfigSchematicsSet) {
+      throw new Error("Global config schematics already registered");
+    }
+    globalConfigSchematicsSet = true;
+    selfRegistrationHost.setGlobalConfigSchematics(globalConfigSchematics);
+    return pluginContext;
+  },
+  withToolsProvider: (toolsProvider) => {
+    if (toolsProviderSet) {
+      throw new Error("Tools provider already registered");
+    }
+    if (predictionLoopHandlerSet) {
+      throw new Error("Tools provider cannot be used with a predictionLoopHandler");
+    }
+
+    toolsProviderSet = true;
+    selfRegistrationHost.setToolsProvider(toolsProvider);
+    return pluginContext;
+  },
+  withGenerator: (generator) => {
+    if (generatorSet) {
+      throw new Error("Generator already registered");
+    }
+
+    generatorSet = true;
+    selfRegistrationHost.setGenerator(generator);
     return pluginContext;
   },
 };
@@ -48,7 +88,7 @@ const pluginContext: PluginContext = {
 import("./../src/index.ts").then(async module => {
   return await module.main(pluginContext);
 }).then(() => {
-  client.plugins.initCompleted();
+  selfRegistrationHost.initCompleted();
 }).catch((error) => {
   console.error("Failed to execute the main function of the plugin.");
   console.error(error);

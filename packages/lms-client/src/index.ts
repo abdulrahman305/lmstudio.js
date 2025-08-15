@@ -1,26 +1,54 @@
-export { ChatHistory, ChatMessage } from "./ChatHistory.js";
-export type { ChatHistoryLike } from "./ChatHistory.js";
+export { Chat, ChatMessage } from "./Chat.js";
+export type { ChatAppendOpts, ChatLike, ChatMessageLike } from "./Chat.js";
+export type { ChatInput, ChatMessageInput } from "./ChatInput.js";
 export {
   ConfigSchematics,
-  ConfigSchematicsBuilder,
-  ParsedConfig,
-  VirtualConfigSchematics,
   configSchematicsBrand,
+  ConfigSchematicsBuilder,
   configSchematicsBuilderBrand,
   createConfigSchematics,
+  ParsedConfig,
   parsedConfigBrand,
+  VirtualConfigSchematics,
+  type InferParsedConfig,
 } from "./customConfig.js";
 export type { DiagnosticsNamespace } from "./diagnostics/DiagnosticsNamespace.js";
 export type { EmbeddingDynamicHandle } from "./embedding/EmbeddingDynamicHandle.js";
+export type { EmbeddingModel } from "./embedding/EmbeddingModel.js";
 export type { EmbeddingNamespace } from "./embedding/EmbeddingNamespace.js";
-export type { EmbeddingSpecificModel } from "./embedding/EmbeddingSpecificModel.js";
-export type { FileHandle } from "./files/FileHandle.js";
+export { FileHandle } from "./files/FileHandle.js";
 export type { FilesNamespace } from "./files/FilesNamespace.js";
-export type { LLMDynamicHandle, LLMPredictionOpts } from "./llm/LLMDynamicHandle.js";
+export type { ParseDocumentOpts } from "./files/ParseDocumentOpts.js";
+export type { ParseDocumentResult } from "./files/ParseDocumentResult.js";
+export type { RetrievalCallbacks, RetrievalOpts } from "./files/RetrievalOpts.js";
+export type { RetrievalResult, RetrievalResultEntry } from "./files/RetrievalResult.js";
+export type { LLMActBaseOpts } from "./llm/act.js";
+export type { ActResult } from "./llm/ActResult.js";
+export type { GeneratorPredictionResult } from "./llm/GeneratorPredictionResult.js";
+export type { LLM } from "./llm/LLM.js";
+export type {
+  LLMActionOpts,
+  LLMDynamicHandle,
+  LLMPredictionFragmentWithRoundIndex,
+  LLMPredictionOpts,
+  LLMRespondOpts,
+} from "./llm/LLMDynamicHandle.js";
+export type {
+  LLMGeneratorActOpts,
+  LLMGeneratorHandle,
+  LLMGeneratorPredictionOpts,
+} from "./llm/LLMGeneratorHandle.js";
 export type { LLMNamespace } from "./llm/LLMNamespace.js";
-export type { LLMSpecificModel } from "./llm/LLMSpecificModel.js";
+export type { OngoingGeneratorPrediction } from "./llm/OngoingGeneratorPrediction.js";
 export type { OngoingPrediction } from "./llm/OngoingPrediction.js";
-export type { PredictionResult } from "./llm/PredictionResult.js";
+export type {
+  BasePredictionResult,
+  PredictionResult,
+  StructuredPredictionResult,
+} from "./llm/PredictionResult.js";
+export { rawFunctionTool, tool, unimplementedRawFunctionTool } from "./llm/tool.js";
+export type { FunctionTool, RawFunctionTool, Tool, ToolBase, ToolCallContext } from "./llm/tool.js";
+export { ToolCallRequestError } from "./llm/ToolCallRequestError.js";
 export { LMStudioClient } from "./LMStudioClient.js";
 export type { LMStudioClientConstructorOpts } from "./LMStudioClient.js";
 export type { DynamicHandle } from "./modelShared/DynamicHandle.js";
@@ -32,25 +60,47 @@ export type {
   RegisterDevelopmentPluginOpts,
   RegisterDevelopmentPluginResult,
 } from "./plugins/PluginsNamespace.js";
+export type { BaseController } from "./plugins/processing/BaseController.js";
 export type { Generator } from "./plugins/processing/Generator.js";
-export type { Preprocessor } from "./plugins/processing/Preprocessor.js";
+export type { GeneratorController } from "./plugins/processing/GeneratorController.js";
+export type { PredictionLoopHandler } from "./plugins/processing/PredictionLoopHandler.js";
 export type {
+  ContentBlockAppendTextOpts,
+  ContentBlockAppendToolRequestOpts,
+  ContentBlockAppendToolResultOpts,
+  ContentBlockReplaceToolRequestOpts,
+  CreateCitationBlockOpts,
   CreateContentBlockOpts,
-  GeneratorController,
+  PredictionLoopHandlerController,
   PredictionProcessCitationBlockController,
   PredictionProcessContentBlockController,
   PredictionProcessDebugInfoBlockController,
   PredictionProcessStatusController,
-  PreprocessorController,
+  PredictionProcessToolStatusController,
   ProcessingController,
+  PromptPreprocessorController,
+  RequestConfirmToolCallOpts,
+  RequestConfirmToolCallResult,
 } from "./plugins/processing/ProcessingController.js";
+export type { PromptPreprocessor } from "./plugins/processing/PromptPreprocessor.js";
+export type { ToolsProvider } from "./plugins/processing/ToolsProvider.js";
+export type { ToolsProviderController } from "./plugins/processing/ToolsProviderController.js";
+export type {
+  ArtifactDownloadPlanner,
+  ArtifactDownloadPlannerDownloadOpts,
+} from "./repository/ArtifactDownloadPlanner.js";
 export type {
   DownloadOpts,
   ModelSearchResultDownloadOption,
 } from "./repository/ModelSearchResultDownloadOption.js";
 export type { ModelSearchResultEntry } from "./repository/ModelSearchResultEntry.js";
-export type { RepositoryNamespace } from "./repository/RepositoryNamespace.js";
-export type { RetrievalNamespace } from "./retrieval/RetrievalNamespace.js";
-export type { RetrievalCallbacks, RetrievalOpts } from "./retrieval/RetrievalOpts.js";
-export type { RetrievalResult, RetrievalResultEntry } from "./retrieval/RetrievalResult.js";
+export type {
+  CreateArtifactDownloadPlannerOpts,
+  DownloadArtifactOpts,
+  EnsureAuthenticatedOpts,
+  LoginWithPreAuthenticatedKeysOpts,
+  LoginWithPreAuthenticatedKeysResult,
+  PushArtifactOpts,
+  RepositoryNamespace,
+} from "./repository/RepositoryNamespace.js";
 export type { SystemNamespace } from "./system/SystemNamespace.js";

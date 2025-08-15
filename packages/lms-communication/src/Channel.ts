@@ -1,4 +1,8 @@
 import { BufferedEvent, Signal, SimpleLogger, makePromise } from "@lmstudio/lms-common";
+import {
+  type AnyBackendInterface,
+  type ExtractBackendInterfaceChannelEndpoints,
+} from "./BackendInterface";
 
 export enum ConnectionStatus {
   /**
@@ -138,3 +142,29 @@ export class Channel<TIncomingPacket, TOutgoingPacket> {
     return promise;
   }
 }
+
+export type InferServerChannelType<
+  TBackendInterface extends AnyBackendInterface,
+  TChannelName extends keyof ExtractBackendInterfaceChannelEndpoints<TBackendInterface>,
+> = Channel<
+  ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toServerPacket"],
+  ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toClientPacket"]
+>;
+
+export type InferClientChannelType<
+  TBackendInterface extends AnyBackendInterface,
+  TChannelName extends keyof ExtractBackendInterfaceChannelEndpoints<TBackendInterface>,
+> = Channel<
+  ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toClientPacket"],
+  ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toServerPacket"]
+>;
+
+export type InferChannelServerToClientPacketType<
+  TBackendInterface extends AnyBackendInterface,
+  TChannelName extends keyof ExtractBackendInterfaceChannelEndpoints<TBackendInterface>,
+> = ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toClientPacket"];
+
+export type InferChannelClientToServerPacketType<
+  TBackendInterface extends AnyBackendInterface,
+  TChannelName extends keyof ExtractBackendInterfaceChannelEndpoints<TBackendInterface>,
+> = ExtractBackendInterfaceChannelEndpoints<TBackendInterface>[TChannelName]["toServerPacket"];

@@ -1,25 +1,29 @@
 import { type SimpleLogger, type Validator } from "@lmstudio/lms-common";
 import { type EmbeddingPort } from "@lmstudio/lms-external-backend-interfaces";
-import { embeddingLoadSchematics } from "@lmstudio/lms-kv-config";
+import { embeddingLlamaLoadConfigSchematics } from "@lmstudio/lms-kv-config";
 import {
+  convertGPUSettingToGPUSplitConfig,
   embeddingLoadModelConfigSchema,
   type EmbeddingLoadModelConfig,
+  type EmbeddingModelInfo,
+  type EmbeddingModelInstanceInfo,
   type KVConfig,
-  type ModelDescriptor,
   type ModelSpecifier,
 } from "@lmstudio/lms-shared-types";
 import { ModelNamespace } from "../modelShared/ModelNamespace.js";
 import { numberToCheckboxNumeric } from "../numberToCheckboxNumeric.js";
 import { EmbeddingDynamicHandle } from "./EmbeddingDynamicHandle.js";
-import { EmbeddingSpecificModel } from "./EmbeddingSpecificModel.js";
+import { EmbeddingModel } from "./EmbeddingModel.js";
 
 /** @public */
 export class EmbeddingNamespace extends ModelNamespace<
   /** @internal */
   EmbeddingPort,
   EmbeddingLoadModelConfig,
+  EmbeddingModelInstanceInfo,
+  EmbeddingModelInfo,
   EmbeddingDynamicHandle,
-  EmbeddingSpecificModel
+  EmbeddingModel
 > {
   /** @internal */
   protected override readonly namespace = "embedding";
@@ -29,10 +33,9 @@ export class EmbeddingNamespace extends ModelNamespace<
   protected override readonly loadModelConfigSchema = embeddingLoadModelConfigSchema;
   /** @internal */
   protected override loadConfigToKVConfig(config: EmbeddingLoadModelConfig): KVConfig {
-    return embeddingLoadSchematics.buildPartialConfig({
-      "llama.acceleration.offloadRatio": config.gpuOffload?.ratio,
-      "llama.acceleration.mainGpu": config.gpuOffload?.mainGpu,
-      "llama.acceleration.tensorSplit": config.gpuOffload?.tensorSplit,
+    return embeddingLlamaLoadConfigSchematics.buildPartialConfig({
+      "llama.acceleration.offloadRatio": config.gpu?.ratio,
+      "load.gpuSplitConfig": convertGPUSettingToGPUSplitConfig(config.gpu),
       "contextLength": config.contextLength,
       "llama.ropeFrequencyBase": numberToCheckboxNumeric(config.ropeFrequencyBase, 0, 0),
       "llama.ropeFrequencyScale": numberToCheckboxNumeric(config.ropeFrequencyScale, 0, 0),
@@ -43,12 +46,11 @@ export class EmbeddingNamespace extends ModelNamespace<
   /** @internal */
   protected override createDomainSpecificModel(
     port: EmbeddingPort,
-    instanceReference: string,
-    descriptor: ModelDescriptor,
+    info: EmbeddingModelInstanceInfo,
     validator: Validator,
     logger: SimpleLogger,
-  ): EmbeddingSpecificModel {
-    return new EmbeddingSpecificModel(port, instanceReference, descriptor, validator, logger);
+  ): EmbeddingModel {
+    return new EmbeddingModel(port, info, validator, logger);
   }
   /** @internal */
   protected override createDomainDynamicHandle(

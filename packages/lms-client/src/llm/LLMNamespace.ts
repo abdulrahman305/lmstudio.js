@@ -2,24 +2,29 @@ import { type SimpleLogger, type Validator } from "@lmstudio/lms-common";
 import { type LLMPort } from "@lmstudio/lms-external-backend-interfaces";
 import { llmLlamaMoeLoadConfigSchematics } from "@lmstudio/lms-kv-config";
 import {
+  convertGPUSettingToGPUSplitConfig,
   llmLoadModelConfigSchema,
   type KVConfig,
+  type LLMInfo,
+  type LLMInstanceInfo,
   type LLMLoadModelConfig,
-  type ModelDescriptor,
   type ModelSpecifier,
 } from "@lmstudio/lms-shared-types";
+import { cacheQuantizationTypeToCheckbox } from "../cacheQuantizationTypeToCheckbox.js";
 import { ModelNamespace } from "../modelShared/ModelNamespace.js";
 import { numberToCheckboxNumeric } from "../numberToCheckboxNumeric.js";
+import { LLM } from "./LLM.js";
 import { LLMDynamicHandle } from "./LLMDynamicHandle.js";
-import { LLMSpecificModel } from "./LLMSpecificModel.js";
 
 /** @public */
 export class LLMNamespace extends ModelNamespace<
   /** @internal */
   LLMPort,
   LLMLoadModelConfig,
+  LLMInstanceInfo,
+  LLMInfo,
   LLMDynamicHandle,
-  LLMSpecificModel
+  LLM
 > {
   /** @internal */
   protected override readonly namespace = "llm";
@@ -32,9 +37,9 @@ export class LLMNamespace extends ModelNamespace<
     return llmLlamaMoeLoadConfigSchematics.buildPartialConfig({
       "contextLength": config.contextLength,
       "llama.evalBatchSize": config.evalBatchSize,
-      "llama.acceleration.offloadRatio": config.gpuOffload?.ratio,
-      "llama.acceleration.mainGpu": config.gpuOffload?.mainGpu,
-      "llama.acceleration.tensorSplit": config.gpuOffload?.tensorSplit,
+      "llama.acceleration.offloadRatio": config.gpu?.ratio,
+      "numCpuExpertLayersRatio": config.gpu?.numCpuExpertLayersRatio,
+      "load.gpuSplitConfig": convertGPUSettingToGPUSplitConfig(config.gpu),
       "llama.flashAttention": config.flashAttention,
       "llama.ropeFrequencyBase": numberToCheckboxNumeric(config.ropeFrequencyBase, 0, 0),
       "llama.ropeFrequencyScale": numberToCheckboxNumeric(config.ropeFrequencyScale, 0, 0),
@@ -43,17 +48,24 @@ export class LLMNamespace extends ModelNamespace<
       "llama.useFp16ForKVCache": config.useFp16ForKVCache,
       "llama.tryMmap": config.tryMmap,
       "numExperts": config.numExperts,
+      "llama.kCacheQuantizationType": cacheQuantizationTypeToCheckbox({
+        value: config.llamaKCacheQuantizationType,
+        falseDefault: "f16",
+      }),
+      "llama.vCacheQuantizationType": cacheQuantizationTypeToCheckbox({
+        value: config.llamaVCacheQuantizationType,
+        falseDefault: "f16",
+      }),
     });
   }
   /** @internal */
   protected override createDomainSpecificModel(
     port: LLMPort,
-    instanceReference: string,
-    descriptor: ModelDescriptor,
+    info: LLMInstanceInfo,
     validator: Validator,
     logger: SimpleLogger,
-  ): LLMSpecificModel {
-    return new LLMSpecificModel(port, instanceReference, descriptor, validator, logger);
+  ): LLM {
+    return new LLM(port, info, validator, logger);
   }
   /** @internal */
   protected override createDomainDynamicHandle(

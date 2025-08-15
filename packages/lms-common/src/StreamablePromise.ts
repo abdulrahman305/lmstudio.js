@@ -139,7 +139,7 @@ export abstract class StreamablePromise<TFragment, TFinal>
       this.hasIterator = true;
     }
     let i = 0;
-    while (this.status === "pending") {
+    while (i < this.buffer.length || this.status === "pending") {
       if (i < this.buffer.length) {
         yield this.buffer[i];
         i++;
@@ -147,11 +147,17 @@ export abstract class StreamablePromise<TFragment, TFinal>
         const nextFragmentPromiseBundle = this.obtainNextFragmentPromiseBundle();
         const nextFragment = await nextFragmentPromiseBundle.promise;
         if (nextFragment === finished) {
+          // Make sure the promise is resolved before breaking the loop.
           break;
         }
         yield nextFragment;
         i++;
       }
     }
+    await this.promiseFinal;
+    // Wait for one more microtask to ensure that the promise is resolved before terminating the
+    // loop. This ensures that the by the time async loop is terminated, the onMessage handler is
+    // already triggered.
+    await Promise.resolve();
   }
 }

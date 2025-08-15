@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z, type ZodSchema } from "zod";
 
 /**
  * TODO: Documentation
@@ -27,6 +27,8 @@ export const kvConfigSchema = z.object({
 });
 
 export type KVConfigLayerName =
+  // Config that is currently being edited
+  | "currentlyEditing"
   // Config that is currently loaded by the model
   | "currentlyLoaded"
   // Override provided by the caller of the API
@@ -35,6 +37,8 @@ export type KVConfigLayerName =
   | "conversationSpecific"
   // Cross-chat global config in chats
   | "conversationGlobal"
+  // Per-request preset selection
+  | "preset"
   // Server session specific config
   | "serverSession"
   // Override provided in the OpenAI http server
@@ -48,13 +52,17 @@ export type KVConfigLayerName =
   // Virtual model baked in configs
   | "virtualModel"
   // LM Studio provided per model defaults
-  | "modelDefault";
+  | "modelDefault"
+  // Hardware config
+  | "hardware";
 
 export const kvConfigLayerNameSchema = z.enum([
+  "currentlyEditing",
   "currentlyLoaded",
   "apiOverride",
   "conversationSpecific",
   "conversationGlobal",
+  "preset",
   "serverSession",
   "httpServerRequestOverride",
   "completeModeFormatting",
@@ -62,6 +70,7 @@ export const kvConfigLayerNameSchema = z.enum([
   "userModelDefault",
   "virtualModel",
   "modelDefault",
+  "hardware",
 ]);
 
 export interface KVConfigStackLayer {
@@ -79,3 +88,26 @@ export interface KVConfigStack {
 export const kvConfigStackSchema = z.object({
   layers: z.array(kvConfigStackLayerSchema),
 });
+
+/**
+ * @public
+ */
+export type KVConfigFieldDependency = {
+  key: string;
+  condition:
+    | {
+        type: "equals";
+        value: any;
+      }
+    | {
+        type: "notEquals";
+        value: any;
+      };
+};
+export const kvConfigFieldDependencySchema = z.object({
+  key: z.string(),
+  condition: z.discriminatedUnion("type", [
+    z.object({ type: z.literal("equals"), value: z.any() }),
+    z.object({ type: z.literal("notEquals"), value: z.any() }),
+  ]),
+}) as ZodSchema<KVConfigFieldDependency>;

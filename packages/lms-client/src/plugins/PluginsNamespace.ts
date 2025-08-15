@@ -3,30 +3,56 @@ import {
   type LoggerInterface,
   makePromise,
   SimpleLogger,
-  Validator,
+  type Validator,
 } from "@lmstudio/lms-common";
 import { type PluginsPort } from "@lmstudio/lms-external-backend-interfaces";
-import { type GlobalKVFieldValueTypeLibraryMap, KVConfigSchematics } from "@lmstudio/lms-kv-config";
+import { emptyKVConfig } from "@lmstudio/lms-kv-config";
 import {
-  type ChatMessageData,
+  artifactIdentifierSchema,
+  type KVConfig,
+  kvConfigSchema,
+  type PluginConfigSpecifier,
   type PluginManifest,
   pluginManifestSchema,
-  serializeError,
 } from "@lmstudio/lms-shared-types";
 import { z } from "zod";
-import { ChatMessage } from "../ChatHistory.js";
-import { type ConfigSchematics } from "../customConfig.js";
+import { LLMGeneratorHandle } from "../llm/LLMGeneratorHandle.js";
 import { type LMStudioClient } from "../LMStudioClient.js";
-import { type Generator } from "./processing/Generator.js";
-import { type Preprocessor } from "./processing/Preprocessor.js";
+import { PluginSelfRegistrationHost } from "./PluginSelfRegistrationHost.js";
 import {
-  type GeneratorController,
-  type PreprocessorController,
-  ProcessingConnector,
-  ProcessingController,
-} from "./processing/ProcessingController.js";
+  MultiRemoteToolUseSession,
+  type RemoteToolUseSession,
+  SingleRemoteToolUseSession,
+} from "./ToolUseSession.js";
 
 /**
+ * Options to use with {@link PluginsNamespace#pluginTools}.
+ *
+ * @experimental [EXP-USE-USE-PLUGIN-TOOLS] Using tools from other applications is still in
+ * development. This may change in the future without warning.
+ *
+ * @public
+ */
+interface PluginToolsOpts {
+  /**
+   * @deprecated [DEP-PLUGIN-RAW-CONFIG] Plugin config access API is still in active development.
+   * Stay tuned for updates.
+   */
+  pluginConfig?: KVConfig;
+  /**
+   * The working directory to use for the plugin tools. If not provided, the tools provider will not
+   * get a working directory.
+   */
+  workingDirectory?: string;
+}
+export const pluginToolsOptsSchema = z.object({
+  pluginConfig: kvConfigSchema.optional(),
+  workingDirectory: z.string().optional(),
+});
+
+/**
+ * Options to use with {@link PluginsNamespace#registerDevelopmentPlugin}.
+ *
  * @public
  */
 export interface RegisterDevelopmentPluginOpts {
@@ -41,6 +67,11 @@ interface RegisterDevelopmentPluginResultBase {
   clientPasskey: string;
 }
 
+/**
+ * Result of {@link PluginsNamespace#registerDevelopmentPlugin}.
+ *
+ * @public
+ */
 export interface RegisterDevelopmentPluginResult {
   clientIdentifier: string;
   clientPasskey: string;
@@ -67,6 +98,10 @@ export class PluginsNamespace {
     this.logger = new SimpleLogger("Plugins", parentLogger);
   }
 
+  /**
+   * @experimental [EXP-PLUGIN-CORE] Plugin support is still in development. This may change in the
+   * future without warning.
+   */
   public async registerDevelopmentPlugin(
     opts: RegisterDevelopmentPluginOpts,
   ): Promise<RegisterDevelopmentPluginResult> {
@@ -97,7 +132,12 @@ export class PluginsNamespace {
       { stack },
     );
 
+    let unregisterCalled = false;
     const unregister = async () => {
+      if (unregisterCalled) {
+        return;
+      }
+      unregisterCalled = true;
       channel.send({ type: "end" });
       const { promise, resolve } = makePromise<void>();
       channel.onClose.subscribeOnce(resolve);
@@ -117,6 +157,9 @@ export class PluginsNamespace {
    *
    * CAVEAT: Currently, we do not wait for the reindex to complete before returning. In the future,
    * we will change this behavior and only return after the reindex is completed.
+   *
+   * @experimental [EXP-PLUGIN-CORE] Plugin support is still in development. This may change in the
+   * future without warning.
    */
   public async reindexPlugins() {
     const stack = getCurrentStack(1);
@@ -124,265 +167,119 @@ export class PluginsNamespace {
   }
 
   /**
-   * Sets the preprocessor to be used by the plugin represented by this client.
+   * If this client is currently running as a plugin, get the self registration host which can be
+   * used to register hooks.
+   *
+   * @deprecated This method is used by plugins internally to register hooks. Do not use directly.
    */
-  public setPreprocessor(preprocessor: Preprocessor) {
-    const stack = getCurrentStack(1);
+  public getSelfRegistrationHost() {
+    return new PluginSelfRegistrationHost(this.port, this.client, this.rootLogger, this.validator);
+  }
 
-    this.validator.validateMethodParamOrThrow(
-      "plugins",
-      "registerPreprocessor",
-      "preprocessor",
-      z.function(),
-      preprocessor,
-      stack,
-    );
-
-    const logger = new SimpleLogger(`Preprocessor`, this.rootLogger);
-    logger.info("Register with LM Studio");
-
-    interface OngoingPreprocessTask {
-      /**
-       * Function to cancel the preprocess task
-       */
-      cancel: () => void;
-      /**
-       * Logger associated with this task.
-       */
-      taskLogger: SimpleLogger;
-    }
-
-    const tasks = new Map<string, OngoingPreprocessTask>();
-    const channel = this.port.createChannel(
-      "setPreprocessor",
-      undefined,
-      message => {
-        switch (message.type) {
-          case "preprocess": {
-            const taskLogger = new SimpleLogger(
-              `Request (${message.taskId.substring(0, 6)})`,
-              logger,
-            );
-            taskLogger.info(`New preprocess request received.`);
-            const abortController = new AbortController();
-            const connector = new ProcessingConnector(
-              this.port,
-              abortController.signal,
-              message.pci,
-              message.token,
-              taskLogger,
-            );
-            const input = ChatMessage.createRaw(message.input, /* mutable */ false);
-            const controller: PreprocessorController = new ProcessingController(
-              this.client,
-              connector,
-              message.config,
-              message.pluginConfig,
-              /* shouldIncludeInputInHistory */ false,
-            );
-            tasks.set(message.taskId, {
-              cancel: () => {
-                abortController.abort();
-              },
-              taskLogger,
-            });
-            // We know the input from the channel is immutable, so we can safely pass false as the
-            // second argument.
-            preprocessor(controller, input.asMutableCopy())
-              .then(result => {
-                taskLogger.info(`Preprocess request completed.`);
-                const parsedReturned = z
-                  .union([z.string(), z.custom<ChatMessage>(v => v instanceof ChatMessage)])
-                  .safeParse(result);
-                if (!parsedReturned.success) {
-                  throw new Error(
-                    "Preprocessor returned an invalid value:" +
-                      Validator.prettyPrintZod("result", parsedReturned.error),
-                  );
-                }
-                const returned = parsedReturned.data;
-                let processed: ChatMessageData;
-                if (typeof returned === "string") {
-                  const messageCopy = input.asMutableCopy();
-                  messageCopy.replaceText(returned);
-                  processed = messageCopy.getRaw();
-                } else {
-                  processed = returned.getRaw();
-                }
-
-                channel.send({
-                  type: "complete",
-                  taskId: message.taskId,
-                  processed,
-                });
-              })
-              .catch(error => {
-                if (error.name === "AbortError") {
-                  logger.info(`Request successfully aborted.`);
-                  channel.send({
-                    type: "aborted",
-                    taskId: message.taskId,
-                  });
-                  return;
-                }
-                logger.warn(`Preprocessing failed.`, error);
-                channel.send({
-                  type: "error",
-                  taskId: message.taskId,
-                  error: serializeError(error),
-                });
-              })
-              .finally(() => {
-                tasks.delete(message.taskId);
-              });
-            break;
-          }
-          case "abort": {
-            const task = tasks.get(message.taskId);
-            if (task !== undefined) {
-              task.taskLogger.info(`Received abort request.`);
-              task.cancel();
-              tasks.delete(message.taskId);
-            }
-            break;
-          }
-        }
-      },
-      { stack },
+  /**
+   * Starts a tool use session use any config specifier.
+   */
+  private async internalStartToolUseSession(
+    pluginIdentifier: string,
+    pluginConfigSpecifier: PluginConfigSpecifier,
+    _stack?: string,
+  ): Promise<RemoteToolUseSession> {
+    return await SingleRemoteToolUseSession.create(
+      this.port,
+      pluginIdentifier,
+      pluginConfigSpecifier,
+      this.logger,
     );
   }
 
   /**
-   * Sets the preprocessor to be used by the plugin represented by this client.
+   * Start a tool use session with a plugin. Note, this method must be used with "Explicit Resource
+   * Management". That is, you should use it like so:
+   *
+   * ```typescript
+   * using pluginTools = await client.plugins.pluginTools("owner/name", { ... });
+   * // ^ Notice the `using` keyword here.
+   * ```
+   *
+   * If you do not use `using`, you must call `pluginTools[Symbol.dispose]()` after you are done.
+   * Otherwise, there will be a memory leak and the plugins you requested tools from will be loaded
+   * indefinitely.
+   *
+   * @experimental [EXP-USE-USE-PLUGIN-TOOLS] Using tools from other applications is still in
+   * development. This may change in the future without warning.
    */
-  public setGenerator(generator: Generator) {
+  public async pluginTools(
+    pluginIdentifier: string,
+    opts: PluginToolsOpts = {},
+  ): Promise<RemoteToolUseSession> {
     const stack = getCurrentStack(1);
-
-    this.validator.validateMethodParamOrThrow(
+    [pluginIdentifier, opts] = this.validator.validateMethodParamsOrThrow(
       "plugins",
-      "setGenerator",
-      "generator",
-      z.function(),
-      generator,
+      "pluginTools",
+      ["pluginIdentifier", "opts"],
+      [artifactIdentifierSchema, pluginToolsOptsSchema],
+      [pluginIdentifier, opts],
       stack,
     );
 
-    const logger = new SimpleLogger(`   Generator`, this.rootLogger);
-    logger.info("Register with LM Studio");
-
-    interface OngoingGenerateTask {
-      /**
-       * Function to cancel the generate task
-       */
-      cancel: () => void;
-      /**
-       * Logger associated with this task.
-       */
-      taskLogger: SimpleLogger;
-    }
-
-    const tasks = new Map<string, OngoingGenerateTask>();
-    const channel = this.port.createChannel(
-      "setGenerator",
-      undefined,
-      message => {
-        switch (message.type) {
-          case "generate": {
-            const taskLogger = new SimpleLogger(
-              `Request (${message.taskId.substring(0, 6)})`,
-              logger,
-            );
-            taskLogger.info(`New generate request received.`);
-            const abortController = new AbortController();
-            const connector = new ProcessingConnector(
-              this.port,
-              abortController.signal,
-              message.pci,
-              message.token,
-              taskLogger,
-            );
-            const controller: GeneratorController = new ProcessingController(
-              this.client,
-              connector,
-              message.config,
-              message.pluginConfig,
-              /* shouldIncludeInputInHistory */ true,
-            );
-            tasks.set(message.taskId, {
-              cancel: () => {
-                abortController.abort();
-              },
-              taskLogger,
-            });
-            // We know the input from the channel is immutable, so we can safely pass false as the
-            // second argument.
-            generator(controller)
-              .then(() => {
-                channel.send({
-                  type: "complete",
-                  taskId: message.taskId,
-                });
-              })
-              .catch(error => {
-                if (error.name === "AbortError") {
-                  logger.info(`Request successfully aborted.`);
-                  channel.send({
-                    type: "aborted",
-                    taskId: message.taskId,
-                  });
-                  return;
-                }
-                logger.warn(`Generation failed.`, error);
-                channel.send({
-                  type: "error",
-                  taskId: message.taskId,
-                  error: serializeError(error),
-                });
-              })
-              .finally(() => {
-                tasks.delete(message.taskId);
-              });
-            break;
-          }
-          case "abort": {
-            const task = tasks.get(message.taskId);
-            if (task !== undefined) {
-              task.taskLogger.info(`Received abort request.`);
-              task.cancel();
-              tasks.delete(message.taskId);
-            }
-            break;
-          }
-        }
-      },
-      { stack },
-    );
+    return await this.internalStartToolUseSession(pluginIdentifier, {
+      type: "direct",
+      config: opts.pluginConfig ?? emptyKVConfig,
+      workingDirectoryPath: opts.workingDirectory,
+    });
   }
-  public async setConfigSchematics(configSchematics: ConfigSchematics<any>) {
-    const stack = getCurrentStack(1);
 
-    this.validator.validateMethodParamOrThrow(
-      "llm",
-      "setConfigSchematics",
-      "configSchematics",
-      z.instanceof(KVConfigSchematics),
-      configSchematics,
+  /**
+   * Start a tool use session associated with a prediction process.
+   *
+   * This method is used internally by processing controllers and will be stripped by the internal
+   * tag.
+   *
+   * @internal
+   */
+  public async startToolUseSessionUsingPredictionProcess(
+    pluginIdentifiers: Array<string>,
+    predictionContextIdentifier: string,
+    token: string,
+    stack?: string,
+  ): Promise<RemoteToolUseSession> {
+    return await MultiRemoteToolUseSession.createUsingPredictionProcess(
+      this.port,
+      pluginIdentifiers,
+      predictionContextIdentifier,
+      token,
+      this.logger,
       stack,
     );
-
-    await this.port.callRpc(
-      "setConfigSchematics",
-      {
-        schematics: (
-          configSchematics as KVConfigSchematics<GlobalKVFieldValueTypeLibraryMap, any, any>
-        ).serialize(),
-      },
-      { stack },
-    );
   }
-  public async initCompleted() {
-    const stack = getCurrentStack(1);
 
-    await this.port.callRpc("pluginInitCompleted", undefined, { stack });
+  /**
+   * @experimental [EXP-GEN-PREDICT] Using generator plugins programmatically is still in
+   * development. This may change in the future without warning.
+   */
+  public createGeneratorHandle(pluginIdentifier: string): LLMGeneratorHandle {
+    return new LLMGeneratorHandle(this.port, pluginIdentifier, this.validator, null, this.logger);
+  }
+
+  /**
+   * Creates a generator handle that is already associated with a prediction process.
+   *
+   * This method is used internally by the processing controllers to create generator handles. It is
+   * marked as internal and will be stripped.
+   *
+   * @internal
+   */
+  public createGeneratorHandleAssociatedWithPredictionProcess(
+    pluginIdentifier: string,
+    predictionContextIdentifier: string,
+    token: string,
+  ) {
+    return new LLMGeneratorHandle(
+      this.port,
+      pluginIdentifier,
+      this.validator,
+      { pci: predictionContextIdentifier, token },
+      this.logger,
+    );
   }
 }

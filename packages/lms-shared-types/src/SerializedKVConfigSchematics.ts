@@ -6,13 +6,15 @@ import { jsonSerializableSchema } from "./JSONSerializable.js";
  * @public
  */
 export interface SerializedKVConfigSchematicsField {
-  key: string;
+  shortKey: string;
+  fullKey: string;
   typeKey: string;
   typeParams: any;
   defaultValue: any;
 }
 export const serializedKVConfigSchematicsFieldSchema = z.object({
-  key: z.string(),
+  shortKey: z.string(),
+  fullKey: z.string(),
   typeKey: z.string(),
   typeParams: jsonSerializableSchema,
   defaultValue: jsonSerializableSchema,
@@ -22,12 +24,12 @@ export const serializedKVConfigSchematicsFieldSchema = z.object({
  * @public
  */
 export interface SerializedKVConfigSchematics {
-  baseKey: string;
   fields: Array<SerializedKVConfigSchematicsField>;
+  extensionPrefixes?: Array<string>;
 }
 export const serializedKVConfigSchematicsSchema = z.object({
-  baseKey: z.string(),
   fields: z.array(serializedKVConfigSchematicsFieldSchema),
+  extensionPrefixes: z.array(z.string()).optional(),
 }) as z.ZodSchema<SerializedKVConfigSchematics>;
 
 export interface KVConfigSchematicsDeserializationError {

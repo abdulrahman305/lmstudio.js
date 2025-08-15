@@ -22,7 +22,6 @@ import {
   createLlmBackendInterface,
   createPluginsBackendInterface,
   createRepositoryBackendInterface,
-  createRetrievalBackendInterface,
   createSystemBackendInterface,
   type DiagnosticsPort,
   type EmbeddingPort,
@@ -30,7 +29,6 @@ import {
   type LLMPort,
   type PluginsPort,
   type RepositoryPort,
-  type RetrievalPort,
   type SystemPort,
 } from "@lmstudio/lms-external-backend-interfaces";
 import { generateRandomBase64 } from "@lmstudio/lms-isomorphic";
@@ -45,7 +43,6 @@ import { friendlyErrorDeserializer } from "./friendlyErrorDeserializer.js";
 import { LLMNamespace } from "./llm/LLMNamespace.js";
 import { PluginsNamespace } from "./plugins/PluginsNamespace.js";
 import { RepositoryNamespace } from "./repository/RepositoryNamespace.js";
-import { RetrievalNamespace } from "./retrieval/RetrievalNamespace.js";
 import { SystemNamespace } from "./system/SystemNamespace.js";
 
 /** @public */
@@ -133,8 +130,6 @@ export class LMStudioClient {
   /** @internal */
   private readonly diagnosticsPort: DiagnosticsPort;
   /** @internal */
-  private readonly retrievalPort: RetrievalPort;
-  /** @internal */
   private readonly filesPort: FilesPort;
   /** @internal */
   private readonly repositoryPort: RepositoryPort;
@@ -145,14 +140,11 @@ export class LMStudioClient {
   public readonly embedding: EmbeddingNamespace;
   public readonly system: SystemNamespace;
   public readonly diagnostics: DiagnosticsNamespace;
-  public readonly retrieval: RetrievalNamespace;
   public readonly files: FilesNamespace;
   public readonly repository: RepositoryNamespace;
   /**
-   * The namespace for plugin registration APIs used internally by LM Studio and lms cli. Unless you
-   * are writing an alternative external plugin runner, you should not use this namespace.
-   *
-   * If you are developing a plugin, follow our guide on "".
+   * @experimental [EXP-PLUGIN-CORE] Plugin support is still in development. This may change in the
+   * future without warning.
    */
   public readonly plugins: PluginsNamespace;
 
@@ -326,18 +318,18 @@ export class LMStudioClient {
       opts,
     ) satisfies LMStudioClientConstructorOpts;
 
-    if ((globalThis as any).__LMS_PLUGIN_CONTEXT) {
+    if ((globalThis as any).__LMS_PLUGIN_CONTEXT && opts.baseUrl === undefined) {
       throw new Error(
         text`
-          You cannot create LMStudioClient in a plugin context. To use LM Studio APIs, use the
-          "client" property attached to the GeneratorController/PreprocessorController.
+          You cannot create a local LMStudioClient in a plugin context. To use LM Studio APIs, use
+          the "client" property attached to the Controllers.
 
           For example, instead of:
 
           ${
             "const client = new LMStudioClient(); // <-- Error\n" +
             "export async function generate(ctl: GeneratorController) {\n" +
-            "  const model = client.llm.load(...);\n" +
+            "  const model = await client.llm.model(...);\n" +
             "}"
           }
 
@@ -345,9 +337,14 @@ export class LMStudioClient {
             
           ${
             "export async function generate(ctl: GeneratorController) {\n" +
-            "  const model = ctl.client.llm.load(...);\n" +
+            "  const model = await ctl.client.llm.model(...);\n" +
             "}"
           }
+
+          If you need to connect to a remote LM Studio, you should pass in the \`baseUrl\` option to
+          the LMStudioClient constructor:
+
+          ${"const client = new LMStudioClient({ baseUrl: 'ws://<host_name>:<port>' });"}
         `,
       );
     }
@@ -377,8 +374,6 @@ export class LMStudioClient {
     this.diagnosticsPort =
       diagnosticsPort ??
       this.createPort("diagnostics", "Diagnostics", createDiagnosticsBackendInterface());
-    this.retrievalPort =
-      retrievalPort ?? this.createPort("retrieval", "Retrieval", createRetrievalBackendInterface());
     this.filesPort = filesPort ?? this.createPort("files", "Files", createFilesBackendInterface());
     this.repositoryPort =
       repositoryPort ??
@@ -402,14 +397,20 @@ export class LMStudioClient {
     );
     this.system = new SystemNamespace(this.systemPort, validator, this.logger);
     this.diagnostics = new DiagnosticsNamespace(this.diagnosticsPort, validator, this.logger);
-    this.retrieval = new RetrievalNamespace(
-      this.retrievalPort,
-      validator,
-      this.embedding,
-      this.logger,
-    );
     this.files = new FilesNamespace(this.filesPort, validator, this.logger);
     this.repository = new RepositoryNamespace(this.repositoryPort, validator, this.logger);
     this.plugins = new PluginsNamespace(this.pluginsPort, this, validator, this.logger, logger);
+  }
+
+  public async [Symbol.asyncDispose]() {
+    await Promise.all([
+      this.llmPort[Symbol.asyncDispose](),
+      this.embeddingPort[Symbol.asyncDispose](),
+      this.systemPort[Symbol.asyncDispose](),
+      this.diagnosticsPort[Symbol.asyncDispose](),
+      this.filesPort[Symbol.asyncDispose](),
+      this.repositoryPort[Symbol.asyncDispose](),
+      this.pluginsPort[Symbol.asyncDispose](),
+    ]);
   }
 }

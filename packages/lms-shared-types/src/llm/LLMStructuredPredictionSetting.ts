@@ -2,6 +2,12 @@ import { z } from "zod";
 import { jsonSerializableSchema } from "../JSONSerializable.js";
 
 /**
+ * @public
+ */
+export type LLMStructuredPredictionType = "none" | "json" | "gbnf";
+export const llmStructuredPredictionTypeSchema = z.enum(["none", "json", "gbnf"]);
+
+/**
  * Settings for structured prediction. Structured prediction is a way to force the model to generate
  * predictions that conform to a specific structure.
  *
@@ -14,7 +20,7 @@ import { jsonSerializableSchema } from "../JSONSerializable.js";
  *
  * ```ts
  * const prediction = model.complete("...", {
- *   maxPredictedTokens: 100,
+ *   maxTokens: 100,
  *   structured: { type: "json" },
  * });
  * ```
@@ -32,7 +38,7 @@ import { jsonSerializableSchema } from "../JSONSerializable.js";
  *   required: ["name", "age"],
  * };
  * const prediction = model.complete("...", {
- *   maxPredictedTokens: 100,
+ *   maxTokens: 100,
  *   structured: { type: "json", jsonSchema: schema },
  * });
  * ```
@@ -49,25 +55,18 @@ import { jsonSerializableSchema } from "../JSONSerializable.js";
  * - In certain cases, the model may get stuck. For example, when forcing it to generate valid JSON,
  *   it may generate a opening brace `{` but never generate a closing brace `}`. In such cases, the
  *   prediction will go on forever until the context length is reached, which can take a long time.
- *   Therefore, it is recommended to always set a `maxPredictedTokens` limit.
+ *   Therefore, it is recommended to always set a `maxTokens` limit.
  *
  * @public
  */
-export type LLMStructuredPredictionSetting =
-  | {
-      type: "none";
-    }
-  | {
-      type: "json";
-      jsonSchema?: any;
-    };
+export type LLMStructuredPredictionSetting = {
+  type: LLMStructuredPredictionType;
+  jsonSchema?: any;
+  gbnfGrammar?: string;
+};
 
-export const llmStructuredPredictionSettingSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("none"),
-  }),
-  z.object({
-    type: z.literal("json"),
-    jsonSchema: jsonSerializableSchema.optional(),
-  }),
-]);
+export const llmStructuredPredictionSettingSchema = z.object({
+  type: llmStructuredPredictionTypeSchema,
+  jsonSchema: jsonSerializableSchema.optional(),
+  gbnfGrammar: z.string().optional(),
+});

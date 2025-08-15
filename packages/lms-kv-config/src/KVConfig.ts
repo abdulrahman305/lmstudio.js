@@ -177,7 +177,7 @@ export class KVFieldValueTypesLibraryBuilder<
     return this;
   }
   public build(): KVFieldValueTypeLibrary<TKVFieldValueTypeLibraryMap> {
-    return new KVFieldValueTypeLibrary(this.valueTypes);
+    return new KVFieldValueTypeLibrary(new Map(this.valueTypes));
   }
 }
 
@@ -197,7 +197,11 @@ export class KVFieldValueTypeLibrary<
     key: TKey,
     param: TKVFieldValueTypeLibraryMap[TKey]["param"],
   ): ZodSchema<TKVFieldValueTypeLibraryMap[TKey]["value"]> {
-    return this.valueTypes.get(key)!.schemaMaker(param);
+    const valueType = this.valueTypes.get(key);
+    if (valueType === undefined) {
+      throw new Error(`Cannot find value type ${key}`);
+    }
+    return valueType.schemaMaker(valueType.paramType.parse(param));
   }
 
   public parseParamTypes<TKey extends keyof TKVFieldValueTypeLibraryMap & string>(
@@ -250,6 +254,7 @@ export interface KVConcreteFieldSchema {
   valueTypeKey: string;
   valueTypeParams: any;
   schema: ZodSchema;
+  fullKey: string;
   defaultValue?: any;
 }
 
@@ -266,6 +271,12 @@ export class KVConfigSchematicsBuilder<
   TKVConfigSchema extends KVVirtualConfigSchema = {},
 > {
   private readonly fields: Map<string, KVConcreteFieldSchema> = new Map();
+  /**
+   * Prefixes for extensions. Does not affect parsing (i.e. extension fields will still not be
+   * visible). However, if a key starts with a prefix that is specified here, it will not be removed
+   * when going through the lenient zod schema.
+   */
+  private readonly extensionPrefixes: Array<string> = [];
 
   public constructor(
     private readonly valueTypeLibrary: KVFieldValueTypeLibrary<TKVFieldValueTypeLibraryMap>,
@@ -300,13 +311,27 @@ export class KVConfigSchematicsBuilder<
       );
     }
     defaultValue = defaultValueParseResult.data;
+    if (this.fields.has(key)) {
+      throw new Error(`Cannot add field with key ${key}. Key already exists in the schematics.`);
+    }
     this.fields.set(key, {
       valueTypeKey,
       valueTypeParams,
       schema: this.valueTypeLibrary.getSchema(valueTypeKey, valueTypeParams),
+      fullKey: key,
       defaultValue,
     });
     return this as any;
+  }
+
+  /**
+   * Adds an extension point. For example, if called with .extension("hello.world"), then any keys
+   * that match "hello.world.*" will be allowed when going through lenient zod schema. However,
+   * any extension fields will still not be accessible via this schematics.
+   */
+  public extension(prefix: string) {
+    this.extensionPrefixes.push(`${prefix}.`);
+    return this;
   }
 
   /**
@@ -350,18 +375,28 @@ export class KVConfigSchematicsBuilder<
       key,
       { valueTypeKey, valueTypeParams, schema, defaultValue },
     ] of innerBuilder.fields.entries()) {
-      this.fields.set(`${scopeKey}.${key}`, {
+      const fullKey = `${scopeKey}.${key}`;
+      if (this.fields.has(fullKey)) {
+        throw new Error(
+          `Cannot add field with key ${fullKey}. Key already exists in the schematics.`,
+        );
+      }
+      this.fields.set(fullKey, {
         valueTypeKey,
         valueTypeParams,
         schema,
+        fullKey,
         defaultValue,
       });
     }
+    this.extensionPrefixes.push(
+      ...innerBuilder.extensionPrefixes.map(prefix => `${scopeKey}.${prefix}`),
+    );
     return this as any;
   }
 
-  public build(): KVConfigSchematics<TKVFieldValueTypeLibraryMap, TKVConfigSchema, ""> {
-    return new KVConfigSchematics(this.valueTypeLibrary, this.fields, "");
+  public build(): KVConfigSchematics<TKVFieldValueTypeLibraryMap, TKVConfigSchema> {
+    return new KVConfigSchematics(this.valueTypeLibrary, this.fields, this.extensionPrefixes);
   }
 }
 
@@ -370,57 +405,90 @@ const createParsedKVConfig = Symbol("createParsedKVConfig");
 export class KVConfigSchematics<
   TKVFieldValueTypeLibraryMap extends KVVirtualFieldValueTypesMapping,
   TKVConfigSchema extends KVVirtualConfigSchema,
-  TBaseKey extends string,
 > {
   public constructor(
     private readonly valueTypeLibrary: KVFieldValueTypeLibrary<TKVFieldValueTypeLibraryMap>,
     private readonly fields: Map<string, KVConcreteFieldSchema>,
-    private readonly baseKey: TBaseKey,
+    private readonly extensionPrefixes: Array<string>,
   ) {}
 
   public getFieldsMap(): ReadonlyMap<string, KVConcreteFieldSchema> {
-    return new Map([...this.fields.entries()].map(([key, field]) => [this.baseKey + key, field]));
+    return new Map([...this.fields.values()].map(field => [field.fullKey, field]));
+  }
+
+  public obtainField(key: string): KVConcreteFieldSchema {
+    const field = this.fields.get(key);
+    if (field === undefined) {
+      const fieldKeys = [...this.fields.keys()];
+      let availableList = fieldKeys
+        .slice(0, 10)
+        .map(key => `- ${key}`)
+        .join("\n");
+      if (fieldKeys.length > 10) {
+        availableList += `\n... and ${fieldKeys.length - 10} more`;
+      }
+      throw new Error(
+        `Cannot access key ${key}. Key does not exist in the schematics. Available keys:\n\n` +
+          availableList,
+      );
+    }
+    return field;
+  }
+
+  public obtainFieldByFullKey(fullKey: string): KVConcreteFieldSchema {
+    const field = this.getFullKeyMap().get(fullKey);
+    if (field === undefined) {
+      const fieldKeys = [...this.getFullKeyMap().keys()];
+      let availableList = fieldKeys
+        .slice(0, 10)
+        .map(key => `- ${key}`)
+        .join("\n");
+      if (fieldKeys.length > 10) {
+        availableList += `\n... and ${fieldKeys.length - 10} more`;
+      }
+      throw new Error(
+        `Cannot access full key ${fullKey}. Full key does not exist in the schematics. Available` +
+          `keys:\n\n` +
+          availableList,
+      );
+    }
+    return field;
   }
 
   public getSchemaForKey<TKey extends keyof TKVConfigSchema & string>(
     key: TKey,
   ): ZodSchema<TKVConfigSchema[TKey]["type"]> {
-    const fullKey = this.baseKey + key;
-    const field = this.fields.get(fullKey);
-    if (field === undefined) {
-      throw new Error(`Field with key ${fullKey} does not exist`);
-    }
+    const field = this.obtainField(key);
     return field.schema;
   }
 
-  private parseField(fieldSchema: KVConcreteFieldSchema, fullKey: string, value: any) {
+  private parseField(fieldSchema: KVConcreteFieldSchema, value: any) {
     if (value === undefined) {
       if (fieldSchema.defaultValue === undefined) {
-        throw new Error(`Field with key ${fullKey} is missing and has no default value`);
+        throw new Error(
+          `Field with key ${fieldSchema.fullKey} is missing and has no default value`,
+        );
       }
       return fieldSchema.defaultValue;
     }
     const parseResult = fieldSchema.schema.safeParse(value);
     if (!parseResult.success) {
       throw new Error(
-        `Field with key ${fullKey} does not satisfy the schema:` + parseResult.error.message,
+        `Field with key ${fieldSchema.fullKey} does not satisfy the schema:` +
+          parseResult.error.message,
       );
     }
     return parseResult.data;
   }
 
-  private parseFieldWithoutDefault(
-    fieldSchema: KVConcreteFieldSchema,
-    fullKey: string,
-    value: any,
-  ) {
+  private parseFieldWithoutDefault(field: KVConcreteFieldSchema, value: any) {
     if (value === undefined) {
       return undefined;
     }
-    const parseResult = fieldSchema.schema.safeParse(value);
+    const parseResult = field.schema.safeParse(value);
     if (!parseResult.success) {
       throw new Error(
-        `Field with key ${fullKey} does not satisfy the schema:` + parseResult.error.message,
+        `Field with key ${field.fullKey} does not satisfy the schema:` + parseResult.error.message,
       );
     }
     return parseResult.data;
@@ -433,27 +501,26 @@ export class KVConfigSchematics<
     config: KVConfig,
     key: TKey,
   ): TKVConfigSchema[TKey]["type"] {
-    const fullKey = this.baseKey + key;
-    const fieldSchema = this.fields.get(key);
-    if (fieldSchema === undefined) {
-      throw new Error(`Field with key ${fullKey} does not exist`);
-    }
-    return this.parseField(fieldSchema, fullKey, config.fields.find(f => f.key === fullKey)?.value);
+    const field = this.obtainField(key);
+    return this.parseField(field, config.fields.find(f => f.key === field.fullKey)?.value);
   }
 
+  public accessByFullKey(config: KVConfig, fullKey: string): any {
+    const field = this.obtainFieldByFullKey(fullKey);
+    return this.parseField(field, config.fields.find(f => f.key === field.fullKey)?.value);
+  }
+
+  /**
+   * Parse and access a field in the config. Returns undefined if the field is missing.
+   */
   public accessPartial<TKey extends keyof TKVConfigSchema & string>(
     config: KVConfig,
     key: TKey,
   ): TKVConfigSchema[TKey]["type"] | undefined {
-    const fullKey = this.baseKey + key;
-    const fieldSchema = this.fields.get(key);
-    if (fieldSchema === undefined) {
-      throw new Error(`Field with key ${fullKey} does not exist`);
-    }
+    const field = this.obtainField(key);
     return this.parseFieldWithoutDefault(
-      fieldSchema,
-      fullKey,
-      config.fields.find(f => f.key === fullKey)?.value,
+      field,
+      config.fields.find(f => f.key === field.fullKey)?.value,
     );
   }
 
@@ -469,8 +536,7 @@ export class KVConfigSchematics<
     TKVFieldValueTypeLibraryMap,
     {
       [TKey in KeyPatternMatch<keyof TKVConfigSchema, TKeyPattern>]: TKVConfigSchema[TKey];
-    },
-    TBaseKey
+    }
   > {
     type Pattern =
       | {
@@ -498,7 +564,7 @@ export class KVConfigSchematics<
         }
       }
     }
-    return new KVConfigSchematics(this.valueTypeLibrary, newFields, this.baseKey);
+    return new KVConfigSchematics(this.valueTypeLibrary, newFields, this.extensionPrefixes);
   }
 
   /**
@@ -512,8 +578,7 @@ export class KVConfigSchematics<
       [TKey in keyof TKVConfigSchema & string as TKey extends `${TScopeKey}.${infer RInnerKey}`
         ? RInnerKey
         : never]: TKVConfigSchema[TKey];
-    },
-    `${TBaseKey}${TScopeKey}.`
+    }
   > {
     const newFields = new Map<string, KVConcreteFieldSchema>();
     for (const [key, field] of this.fields.entries()) {
@@ -521,31 +586,31 @@ export class KVConfigSchematics<
         newFields.set(key.substring(scopeKey.length + 1), field);
       }
     }
-    return new KVConfigSchematics(this.valueTypeLibrary, newFields, `${this.baseKey}${scopeKey}.`);
+    return new KVConfigSchematics(this.valueTypeLibrary, newFields, this.extensionPrefixes);
   }
 
   public union<TOtherKVConfigSchema extends KVVirtualConfigSchema>(
     other: KVConfigSchematics<
       TKVFieldValueTypeLibraryMap, // Must be the same
-      TOtherKVConfigSchema,
-      TBaseKey // Must be the same
+      TOtherKVConfigSchema
     >,
-  ): KVConfigSchematics<
-    TKVFieldValueTypeLibraryMap,
-    TKVConfigSchema & TOtherKVConfigSchema,
-    TBaseKey
-  > {
-    if (this.baseKey !== other.baseKey) {
-      throw new Error("Cannot union two config schematics with different base keys");
-    }
+  ): KVConfigSchematics<TKVFieldValueTypeLibraryMap, TKVConfigSchema & TOtherKVConfigSchema> {
     const newFields = new Map<string, KVConcreteFieldSchema>();
     for (const [key, field] of this.fields.entries()) {
       newFields.set(key, field);
     }
     for (const [key, field] of other.fields.entries()) {
+      if (newFields.has(key)) {
+        throw new Error(
+          "Cannot union two KVConfigSchematics. The following key is duplicated: " + key,
+        );
+      }
       newFields.set(key, field);
     }
-    return new KVConfigSchematics(this.valueTypeLibrary, newFields, this.baseKey);
+    return new KVConfigSchematics(this.valueTypeLibrary, newFields, [
+      ...this.extensionPrefixes,
+      ...other.extensionPrefixes,
+    ]);
   }
 
   /**
@@ -553,20 +618,30 @@ export class KVConfigSchematics<
    */
   public flattenBaseKey() {
     const newFields = new Map<string, KVConcreteFieldSchema>();
-    for (const [key, field] of this.fields.entries()) {
-      newFields.set(this.baseKey + key, field);
+    for (const field of this.fields.values()) {
+      newFields.set(field.fullKey, field);
     }
-    return new KVConfigSchematics(this.valueTypeLibrary, newFields, "");
+    return new KVConfigSchematics(this.valueTypeLibrary, newFields, this.extensionPrefixes);
   }
 
   public parseToMap(config: KVConfig) {
     const rawConfigMap = kvConfigToMap(config);
     const parsedConfigMap = new Map<string, any>();
-    for (const [key, fieldSchema] of this.fields.entries()) {
-      const fullKey = this.baseKey + key;
-      const value = rawConfigMap.get(fullKey);
-      const parsedValue = this.parseField(fieldSchema, fullKey, value);
+    for (const [key, field] of this.fields.entries()) {
+      const value = rawConfigMap.get(field.fullKey);
+      const parsedValue = this.parseField(field, value);
       parsedConfigMap.set(key, parsedValue);
+    }
+    return parsedConfigMap;
+  }
+
+  public parseToMapWithFullKey(config: KVConfig) {
+    const rawConfigMap = kvConfigToMap(config);
+    const parsedConfigMap = new Map<string, any>();
+    for (const field of this.fields.values()) {
+      const value = rawConfigMap.get(field.fullKey);
+      const parsedValue = this.parseField(field, value);
+      parsedConfigMap.set(field.fullKey, parsedValue);
     }
     return parsedConfigMap;
   }
@@ -574,10 +649,9 @@ export class KVConfigSchematics<
   public parseToMapPartial(config: KVConfig) {
     const rawConfigMap = kvConfigToMap(config);
     const parsedConfigMap = new Map<string, any>();
-    for (const [key, fieldSchema] of this.fields.entries()) {
-      const fullKey = this.baseKey + key;
-      const value = rawConfigMap.get(fullKey);
-      const parsedValue = this.parseFieldWithoutDefault(fieldSchema, fullKey, value);
+    for (const [key, field] of this.fields.entries()) {
+      const value = rawConfigMap.get(field.fullKey);
+      const parsedValue = this.parseFieldWithoutDefault(field, value);
       if (parsedValue !== undefined) {
         parsedConfigMap.set(key, parsedValue);
       }
@@ -590,11 +664,11 @@ export class KVConfigSchematics<
    * schema.
    */
   public parse(config: KVConfig): ParsedKVConfig<TKVConfigSchema> {
-    return ParsedKVConfig[createParsedKVConfig](this, this.parseToMap(config));
+    return ParsedKVConfig[createParsedKVConfig](this.parseToMap(config));
   }
 
   public parsePartial(config: KVConfig): PartialParsedKVConfig<TKVConfigSchema> {
-    return PartialParsedKVConfig[createParsedKVConfig](this, this.parseToMapPartial(config));
+    return PartialParsedKVConfig[createParsedKVConfig](this.parseToMapPartial(config));
   }
 
   /**
@@ -605,10 +679,9 @@ export class KVConfigSchematics<
     [TKey in keyof TKVConfigSchema & string]?: TKVConfigSchema[TKey]["type"];
   }): KVConfig {
     return {
-      fields: Array.from(this.fields.entries()).map(([key, fieldSchema]) => {
-        const fullKey = this.baseKey + key;
-        const value = this.parseField(fieldSchema, fullKey, valuesRecord[key]);
-        return { key: fullKey, value };
+      fields: Array.from(this.fields.entries()).map(([key, field]) => {
+        const value = this.parseField(field, valuesRecord[key]);
+        return { key: field.fullKey, value };
       }),
     };
   }
@@ -624,12 +697,8 @@ export class KVConfigSchematics<
       fields: Object.entries(valuesRecord)
         .filter(([_key, value]) => value !== undefined)
         .map(([key, value]) => {
-          const fieldSchema = this.fields.get(key);
-          if (fieldSchema === undefined) {
-            throw new Error(`Field with key ${this.baseKey + key} does not exist`);
-          }
-          const fullKey = this.baseKey + key;
-          return { key: fullKey, value: this.parseField(fieldSchema, fullKey, value) };
+          const field = this.obtainField(key);
+          return { key: field.fullKey, value: this.parseField(field, value) };
         }),
     };
   }
@@ -641,21 +710,22 @@ export class KVConfigSchematics<
   }
 
   public configBuilder(): KVConfigBuilder<TKVConfigSchema> {
-    return new KVConfigBuilder(this.baseKey);
+    return new KVConfigBuilder(this.fields);
   }
 
-  public clone(): KVConfigSchematics<TKVFieldValueTypeLibraryMap, TKVConfigSchema, TBaseKey> {
-    return new KVConfigSchematics(this.valueTypeLibrary, new Map(this.fields), this.baseKey);
+  public clone(): KVConfigSchematics<TKVFieldValueTypeLibraryMap, TKVConfigSchema> {
+    return new KVConfigSchematics(
+      this.valueTypeLibrary,
+      new Map(this.fields),
+      this.extensionPrefixes,
+    );
   }
 
   public withTypeParamOverride<
     TKey extends keyof TKVConfigSchema & string,
     TParam extends TKVFieldValueTypeLibraryMap[TKVConfigSchema[TKey]["valueTypeKey"]]["param"],
   >(key: TKey, paramMapper: (oldParam: TParam) => TParam) {
-    const field = this.fields.get(key);
-    if (field === undefined) {
-      throw new Error(`Field with key ${this.baseKey + key} does not exist`);
-    }
+    const field = this.obtainField(key);
     const clone = this.clone();
     clone.fields.set(key, {
       ...field,
@@ -669,23 +739,38 @@ export class KVConfigSchematics<
   }
 
   /**
+   * Cached full key map
+   */
+  private fullKepMap: Map<string, KVConcreteFieldSchema> | undefined = undefined;
+
+  private getFullKeyMap(): Map<string, KVConcreteFieldSchema> {
+    if (this.fullKepMap !== undefined) {
+      return this.fullKepMap;
+    }
+    this.fullKepMap = new Map([...this.fields.values()].map(field => [field.fullKey, field]));
+    return this.fullKepMap;
+  }
+
+  /**
    * Cached lenient zod schema
    */
   private lenientZodSchema: ZodSchema<KVConfig> | undefined = undefined;
 
   private makeLenientZodSchema(): ZodSchema<KVConfig> {
+    const fullKeyMap = this.getFullKeyMap();
     return kvConfigSchema.transform(value => {
       const seenKeys = new Set<string>();
       return {
         fields: value.fields.filter(field => {
+          if (this.extensionPrefixes.some(prefix => field.key.startsWith(prefix))) {
+            // If we matched an extension prefix, we don't care about the key or value type. Just
+            // allow it.
+            return true;
+          }
           if (seenKeys.has(field.key)) {
             return false;
           }
-          if (!field.key.startsWith(this.baseKey)) {
-            return false;
-          }
-          const key = field.key.substring(this.baseKey.length);
-          const fieldDef = this.fields.get(key);
+          const fieldDef = fullKeyMap.get(field.key);
           if (fieldDef === undefined) {
             return false;
           }
@@ -693,7 +778,7 @@ export class KVConfigSchematics<
           if (!parsed.success) {
             return false;
           }
-          seenKeys.add(key);
+          seenKeys.add(field.key);
           return true;
         }),
       };
@@ -738,17 +823,42 @@ export class KVConfigSchematics<
     return field.valueTypeParams as any;
   }
 
+  public getValueTypeParamByFullKey(
+    key: string,
+  ): TKVFieldValueTypeLibraryMap[keyof TKVFieldValueTypeLibraryMap]["param"] {
+    const field = this.getFullKeyMap().get(key);
+    if (field === undefined) {
+      throw new Error(`Field with key ${key} does not exist in the schematics`);
+    }
+    return field.valueTypeParams;
+  }
+
+  public hasFullKey(key: string): boolean {
+    const field = this.getFullKeyMap().get(key);
+    return field !== undefined;
+  }
+
   /**
    * Given a KVConfig, filter it to only include fields that are in the schematics.
    */
-  public filterConfig(config: KVConfig): KVConfig {
+  public filterConfig(
+    config: KVConfig,
+    additionalFilter?: ConfigFieldFilter<TKVFieldValueTypeLibraryMap>,
+  ): KVConfig {
+    const fullKeyMap = this.getFullKeyMap();
     return {
-      fields: config.fields.filter(field => {
-        if (!field.key.startsWith(this.baseKey)) {
+      fields: config.fields.filter(configField => {
+        const field = fullKeyMap.get(configField.key);
+        if (field === undefined) {
           return false;
         }
-        const key = field.key.substring(this.baseKey.length);
-        return this.fields.has(key);
+        if (additionalFilter !== undefined) {
+          return additionalFilter(field.fullKey, {
+            type: field.valueTypeKey,
+            param: field.valueTypeParams,
+          });
+        }
+        return true;
       }),
     };
   }
@@ -765,19 +875,26 @@ export class KVConfigSchematics<
     };
   }
 
-  public twoWayFilterConfig(config: KVConfig): readonly [included: KVConfig, excluded: KVConfig] {
+  public twoWayFilterConfig(
+    config: KVConfig,
+    additionalFilter?: ConfigFieldFilter<TKVFieldValueTypeLibraryMap>,
+  ): readonly [included: KVConfig, excluded: KVConfig] {
     const includedFields: Array<KVConfig["fields"][number]> = [];
     const excludedFields: Array<KVConfig["fields"][number]> = [];
-    for (const field of config.fields) {
-      if (!field.key.startsWith(this.baseKey)) {
-        excludedFields.push(field);
-        continue;
+    const fullKeyMap = this.getFullKeyMap();
+    for (const configField of config.fields) {
+      const field = fullKeyMap.get(configField.key);
+      let include = field !== undefined;
+      if (field !== undefined && additionalFilter !== undefined) {
+        include = additionalFilter(field.fullKey, {
+          type: field.valueTypeKey,
+          param: field.valueTypeParams,
+        });
       }
-      const key = field.key.substring(this.baseKey.length);
-      if (this.fields.has(key)) {
-        includedFields.push(field);
+      if (include) {
+        includedFields.push(configField);
       } else {
-        excludedFields.push(field);
+        excludedFields.push(configField);
       }
     }
     return [{ fields: includedFields }, { fields: excludedFields }];
@@ -787,13 +904,8 @@ export class KVConfigSchematics<
    * Given a list of keys, filter it to only include keys that are in the schematics.
    */
   public filterFullKeys(keys: ReadonlyArray<string>): Array<string> {
-    return keys.filter(key => {
-      if (!key.startsWith(this.baseKey)) {
-        return false;
-      }
-      const innerKey = key.substring(this.baseKey.length);
-      return this.fields.has(innerKey);
-    });
+    const fullKeyMap = this.getFullKeyMap();
+    return keys.filter(key => fullKeyMap.has(key));
   }
 
   /**
@@ -804,10 +916,9 @@ export class KVConfigSchematics<
     const aMap = kvConfigToMap(a);
     const bMap = kvConfigToMap(b);
 
-    for (const [key, fieldSchema] of this.fields.entries()) {
-      const fullKey = this.baseKey + key;
-      const aValue = aMap.get(fullKey);
-      const bValue = bMap.get(fullKey);
+    for (const field of this.fields.values()) {
+      const aValue = aMap.get(field.fullKey);
+      const bValue = bMap.get(field.fullKey);
       if (aValue === undefined) {
         if (bValue === undefined) {
           // Both are missing, continue
@@ -817,8 +928,8 @@ export class KVConfigSchematics<
         }
       }
       this.valueTypeLibrary.effectiveEquals(
-        fieldSchema.valueTypeKey,
-        fieldSchema.valueTypeParams,
+        field.valueTypeKey,
+        field.valueTypeParams,
         aValue,
         bValue,
       );
@@ -836,19 +947,27 @@ export class KVConfigSchematics<
     a: TKVConfigSchema[TKey]["type"],
     b: TKVConfigSchema[TKey]["type"],
   ) {
-    const field = this.fields.get(key);
-    if (field === undefined) {
-      throw new Error(`Field with key ${this.baseKey + key} does not exist`);
-    }
-    return this.valueTypeLibrary.effectiveEquals(field.valueTypeKey, field.valueTypeParams, a, b);
+    const field = this.obtainField(key);
+    return this.valueTypeLibrary.effectiveEquals(
+      field.valueTypeKey,
+      field.valueTypeParams,
+      field.schema.parse(a),
+      field.schema.parse(b),
+    );
   }
 
   public fieldEffectiveEqualsWithFullKey(fullKey: string, a: any, b: any) {
-    if (!fullKey.startsWith(this.baseKey)) {
-      throw new Error(`Field with key ${fullKey} does not exist`);
+    const fullKeyMap = this.getFullKeyMap();
+    const field = fullKeyMap.get(fullKey);
+    if (field === undefined) {
+      throw new Error(`Field with key ${fullKey} does not exist in the schematics`);
     }
-    const innerKey = fullKey.substring(this.baseKey.length);
-    return this.fieldEffectiveEquals(innerKey, a, b);
+    return this.valueTypeLibrary.effectiveEquals(
+      field.valueTypeKey,
+      field.valueTypeParams,
+      field.schema.parse(a),
+      field.schema.parse(b),
+    );
   }
 
   private makeInternalFieldStringifyOpts(opts: FieldStringifyOpts): InnerFieldStringifyOpts {
@@ -863,10 +982,7 @@ export class KVConfigSchematics<
     value: TKVConfigSchema[TKey]["type"],
     opts: FieldStringifyOpts = {},
   ) {
-    const field = this.fields.get(key);
-    if (field === undefined) {
-      throw new Error(`Field with key ${this.baseKey + key} does not exist`);
-    }
+    const field = this.obtainField(key);
     return this.valueTypeLibrary.stringify(
       field.valueTypeKey,
       field.valueTypeParams,
@@ -880,11 +996,8 @@ export class KVConfigSchematics<
     value: any,
     opts: FieldStringifyOpts,
   ): string | null {
-    if (!key.startsWith(this.baseKey)) {
-      return null;
-    }
-    const innerKey = key.substring(this.baseKey.length);
-    const field = this.fields.get(innerKey);
+    const fullKeyMap = this.getFullKeyMap();
+    const field = fullKeyMap.get(key);
     if (field === undefined) {
       return null;
     }
@@ -915,8 +1028,9 @@ export class KVConfigSchematics<
     const filteredPatch = this.filterConfig(patch);
     const patchMap = kvConfigToMap(filteredPatch);
     const newMap = new Map(kvConfigToMap(target));
+    const fullKeyMap = this.getFullKeyMap();
     for (const [key, value] of patchMap.entries()) {
-      const field = this.fields.get(key.slice(this.baseKey.length));
+      const field = fullKeyMap.get(key);
       if (field === undefined) {
         continue;
       }
@@ -940,15 +1054,14 @@ export class KVConfigSchematics<
 
   /**
    * Given a KVConfig, iterate through all the fields that are in the schematics. Keys will be full
-   * keys (i.e. contains the base key).
+   * keys.
    */
   public *iterateFieldsOfConfig(config: KVConfig): Generator<[string, any]> {
+    const fullKeyMap = this.getFullKeyMap();
     for (const { key, value } of config.fields) {
-      if (key.startsWith(this.baseKey)) {
-        const field = this.fields.get(key.substring(this.baseKey.length));
-        if (field !== undefined) {
-          yield [key, value];
-        }
+      const field = fullKeyMap.get(key);
+      if (field !== undefined) {
+        yield [key, value];
       }
     }
   }
@@ -957,8 +1070,9 @@ export class KVConfigSchematics<
    * Given a KVConfig, iterate through all the fields that are in the schematics.
    */
   public *fullKeys(): Generator<string> {
-    for (const key of this.fields.keys()) {
-      yield this.baseKey + key;
+    const fullKeyMap = this.getFullKeyMap();
+    for (const key of fullKeyMap.keys()) {
+      yield key;
     }
   }
 
@@ -968,78 +1082,107 @@ export class KVConfigSchematics<
   public effectiveCompareConfig(
     a: KVConfig,
     b: KVConfig,
+    opts: {
+      fieldFilter?: ConfigFieldFilter<TKVFieldValueTypeLibraryMap>;
+    } = {},
   ): { onlyInA: Array<string>; onlyInB: Array<string>; inBothButDifferent: Array<string> } {
+    const { fieldFilter } = opts;
     const aMap = kvConfigToMap(a);
     const bMap = kvConfigToMap(b);
     const onlyInA: Array<string> = [];
     const onlyInB: Array<string> = [];
     const inBothButDifferent: Array<string> = [];
-    for (const [key, fieldSchema] of this.fields.entries()) {
-      const fullKey = this.baseKey + key;
-      const aValue = aMap.get(fullKey);
-      const bValue = bMap.get(fullKey);
+    for (const field of this.fields.values()) {
+      if (fieldFilter !== undefined) {
+        if (
+          !fieldFilter(field.fullKey, {
+            type: field.valueTypeKey,
+            param: field.valueTypeParams,
+          })
+        ) {
+          continue;
+        }
+      }
+      const aValue = aMap.get(field.fullKey);
+      const bValue = bMap.get(field.fullKey);
       if (aValue === undefined) {
         if (bValue === undefined) {
           continue;
         } else {
-          onlyInB.push(fullKey);
+          onlyInB.push(field.fullKey);
         }
       } else {
         if (bValue === undefined) {
-          onlyInA.push(fullKey);
+          onlyInA.push(field.fullKey);
         } else {
           if (
             !this.valueTypeLibrary.effectiveEquals(
-              fieldSchema.valueTypeKey,
-              fieldSchema.valueTypeParams,
+              field.valueTypeKey,
+              field.valueTypeParams,
               aValue,
               bValue,
             )
           ) {
-            inBothButDifferent.push(fullKey);
+            inBothButDifferent.push(field.fullKey);
           }
         }
       }
     }
     return { onlyInA, onlyInB, inBothButDifferent };
   }
+
   public serialize(): SerializedKVConfigSchematics {
     return {
-      baseKey: this.baseKey,
       fields: [...this.fields.entries()].map(([key, field]) => ({
-        key,
+        shortKey: key,
+        fullKey: field.fullKey,
         typeKey: field.valueTypeKey,
         typeParams: field.valueTypeParams,
         defaultValue: field.defaultValue!,
       })),
+      extensionPrefixes: this.extensionPrefixes,
     };
   }
+
+  /**
+   * Check if any of the fields in the schematics has a full key that starts with the given prefix.
+   */
+  public hasFieldsWithPrefix(prefix: string): boolean {
+    for (const field of this.fields.values()) {
+      if (field.fullKey.startsWith(prefix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public static deserialize(
     valueTypeLibrary: KVFieldValueTypeLibrary<any>,
     serialized: SerializedKVConfigSchematics,
-  ): KVConfigSchematics<any, KVVirtualConfigSchema, string> {
+  ): KVConfigSchematics<any, KVVirtualConfigSchema> {
     const fields = new Map<string, KVConcreteFieldSchema>(
       serialized.fields.map(field => {
         const typeParams = valueTypeLibrary.parseParamTypes(field.typeKey, field.typeParams);
         const valueSchema = valueTypeLibrary.getSchema(field.typeKey, typeParams);
         return [
-          field.key,
+          field.shortKey,
           {
             valueTypeKey: field.typeKey,
             valueTypeParams: typeParams,
             schema: valueSchema,
+            fullKey: field.fullKey,
             defaultValue: valueSchema.parse(field.defaultValue),
           },
         ];
       }),
     );
-    return new KVConfigSchematics(valueTypeLibrary, fields, serialized.baseKey);
+    return new KVConfigSchematics(valueTypeLibrary, fields, serialized.extensionPrefixes ?? []);
   }
   public static tryDeserialize(
     valueTypeLibrary: KVFieldValueTypeLibrary<any>,
     serialized: SerializedKVConfigSchematics,
   ): {
-    schematics: KVConfigSchematics<any, KVVirtualConfigSchema, string>;
+    schematics: KVConfigSchematics<any, KVVirtualConfigSchema>;
     errors: Array<KVConfigSchematicsDeserializationError>;
   } {
     const fields = new Map<string, KVConcreteFieldSchema>();
@@ -1048,21 +1191,26 @@ export class KVConfigSchematics<
       try {
         const typeParams = valueTypeLibrary.parseParamTypes(field.typeKey, field.typeParams);
         const valueSchema = valueTypeLibrary.getSchema(field.typeKey, typeParams);
-        fields.set(field.key, {
+        fields.set(field.shortKey, {
           valueTypeKey: field.typeKey,
           valueTypeParams: typeParams,
           schema: valueSchema,
+          fullKey: field.fullKey,
           defaultValue: valueSchema.parse(field.defaultValue),
         });
       } catch (error) {
         errors.push({
-          fullKey: serialized.baseKey + field.key,
+          fullKey: field.fullKey,
           error: serializeError(error),
         });
       }
     }
     return {
-      schematics: new KVConfigSchematics(valueTypeLibrary, fields, serialized.baseKey),
+      schematics: new KVConfigSchematics(
+        valueTypeLibrary,
+        fields,
+        serialized.extensionPrefixes ?? [],
+      ),
       errors,
     };
   }
@@ -1077,8 +1225,10 @@ export function prependBaseKeyToSerializedKVConfigSchematics(
   serialized: SerializedKVConfigSchematics,
 ): SerializedKVConfigSchematics {
   return {
-    baseKey: baseKey + serialized.baseKey,
-    fields: serialized.fields,
+    fields: serialized.fields.map(field => ({
+      ...field,
+      shortKey: baseKey + field.shortKey,
+    })),
   };
 }
 
@@ -1101,13 +1251,17 @@ export function stripBaseKeyFromKVConfig(baseKey: string, config: KVConfig): KVC
 }
 
 export class KVConfigBuilder<TKVConfigSchema extends KVVirtualConfigSchema> {
-  public constructor(private readonly baseKey: string) {}
+  public constructor(private readonly fieldDefs: Map<string, KVConcreteFieldSchema>) {}
   private readonly fields: Map<string, any> = new Map();
   public with<TKey extends keyof TKVConfigSchema & string>(
     key: TKey,
     value: TKVConfigSchema[TKey]["type"],
   ) {
-    this.fields.set(this.baseKey + key, value);
+    const field = this.fieldDefs.get(key);
+    if (field === undefined) {
+      throw new Error(`Field with key ${key} does not exist in the schematics.`);
+    }
+    this.fields.set(field.fullKey, value);
     return this;
   }
   public build() {
@@ -1123,7 +1277,6 @@ export class KVConfigBuilder<TKVConfigSchema extends KVVirtualConfigSchema> {
  */
 export class ParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema> {
   private constructor(
-    private readonly schema: KVConfigSchematics<any, TKVConfigSchema, string>,
     /**
      * Guaranteed to satisfy the schema.
      */
@@ -1134,10 +1287,9 @@ export class ParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema> {
    * @internal
    */
   public static [createParsedKVConfig]<TKVConfigSchema extends KVVirtualConfigSchema>(
-    schema: KVConfigSchematics<any, TKVConfigSchema, string>,
     configMap: Map<string, any>,
   ): ParsedKVConfig<TKVConfigSchema> {
-    return new ParsedKVConfig(schema, configMap);
+    return new ParsedKVConfig(configMap);
   }
 
   public get<TKey extends keyof TKVConfigSchema & string>(
@@ -1153,7 +1305,6 @@ export class ParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema> {
  */
 export class PartialParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema> {
   private constructor(
-    private readonly schema: KVConfigSchematics<any, TKVConfigSchema, string>,
     /**
      * Guaranteed to satisfy the schema.
      */
@@ -1161,10 +1312,9 @@ export class PartialParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema
   ) {}
 
   public static [createParsedKVConfig]<TKVConfigSchema extends KVVirtualConfigSchema>(
-    schema: KVConfigSchematics<any, TKVConfigSchema, string>,
     configMap: Map<string, any>,
   ): PartialParsedKVConfig<TKVConfigSchema> {
-    return new PartialParsedKVConfig(schema, configMap);
+    return new PartialParsedKVConfig(configMap);
   }
 
   public get<TKey extends keyof TKVConfigSchema & string>(
@@ -1180,6 +1330,10 @@ export class PartialParsedKVConfig<TKVConfigSchema extends KVVirtualConfigSchema
 
 export function makeKVConfigFromFields(fields: Array<KVConfigField>): KVConfig {
   return { fields };
+}
+
+export function kvConfigField(key: string, value: any): KVConfigField {
+  return { key, value };
 }
 
 export function kvConfigToFields(config: KVConfig): Array<KVConfigField> {
@@ -1337,11 +1491,7 @@ export function deepEquals<T>(a: T, b: T) {
  * is compared. Default values are used for missing fields. (Meaning having a field with the same
  * value as the default value is considered equal to not having the field at all.)
  */
-export function kvConfigEquals(
-  schematics: KVConfigSchematics<any, any, any>,
-  a: KVConfig,
-  b: KVConfig,
-) {
+export function kvConfigEquals(schematics: KVConfigSchematics<any, any>, a: KVConfig, b: KVConfig) {
   const aMap = schematics.parseToMap(a);
   const bMap = schematics.parseToMap(b);
 
@@ -1366,27 +1516,14 @@ type UnionKeyOf<T> = T extends T ? keyof T : never;
 /**
  * Given a ConfigSchematic, gets the internal virtual schema with shortened keys.
  */
-export type InferConfigSchemaMap<TKVConfigSchematics extends KVConfigSchematics<any, any, any>> =
-  TKVConfigSchematics extends KVConfigSchematics<any, infer RSchema, any> ? RSchema : never;
+export type InferConfigSchemaMap<TKVConfigSchematics extends KVConfigSchematics<any, any>> =
+  TKVConfigSchematics extends KVConfigSchematics<any, infer RSchema> ? RSchema : never;
 
 /**
  * Given a ConfigSchematic, gets the shortened keys of the internal virtual schema.
  */
-export type InferConfigSchemaKeys<TKVConfigSchematics extends KVConfigSchematics<any, any, any>> =
+export type InferConfigSchemaKeys<TKVConfigSchematics extends KVConfigSchematics<any, any>> =
   UnionKeyOf<InferConfigSchemaMap<TKVConfigSchematics>>;
-
-export type InferConfigSchemaFullMap<
-  TKVConfigSchematics extends KVConfigSchematics<any, any, any>,
-> =
-  TKVConfigSchematics extends KVConfigSchematics<any, infer RSchema, infer RBaseKey>
-    ? {
-        [TKey in keyof RSchema as `${RBaseKey}${TKey & string}`]: RSchema[TKey];
-      }
-    : never;
-
-export type InferConfigSchemaFullKeys<
-  TKVConfigSchematics extends KVConfigSchematics<any, any, any>,
-> = UnionKeyOf<InferConfigSchemaFullMap<TKVConfigSchematics>>;
 
 export type InferValueTypeMap<TLibrary extends KVFieldValueTypeLibrary<any>> =
   TLibrary extends KVFieldValueTypeLibrary<infer RMap> ? RMap : never;
@@ -1394,3 +1531,17 @@ export type InferValueTypeMap<TLibrary extends KVFieldValueTypeLibrary<any>> =
 export type InferValueTypeKeys<TLibrary extends KVFieldValueTypeLibrary<any>> = UnionKeyOf<
   InferValueTypeMap<TLibrary>
 >;
+
+export type ConfigFieldFilter<TKVFieldValueTypeLibraryMap extends KVVirtualFieldValueTypesMapping> =
+  (
+    fullKey: string,
+    valueTypeDescriptor: {
+      [TType in keyof TKVFieldValueTypeLibraryMap]: {
+        type: TType;
+        param: TKVFieldValueTypeLibraryMap[TType]["param"];
+      };
+    }[keyof TKVFieldValueTypeLibraryMap],
+  ) => boolean;
+
+export type InferConfigFieldFilter<TKVConfigSchematics extends KVConfigSchematics<any, any>> =
+  TKVConfigSchematics extends KVConfigSchematics<infer RMap, any> ? ConfigFieldFilter<RMap> : never;

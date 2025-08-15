@@ -7,8 +7,10 @@
  * 3. Utility types that can be used to work with types of schema.
  */
 
+import { defaultGPUSplitConfig } from "@lmstudio/lms-shared-types";
 import {
   KVConfigSchematicsBuilder,
+  type InferConfigFieldFilter,
   type InferConfigSchemaKeys,
   type InferConfigSchemaMap,
   type InferValueTypeKeys,
@@ -23,6 +25,8 @@ import { kvValueTypesLibrary } from "./valueTypes.js";
 // ---------------------------
 
 export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypesLibrary)
+  .extension("ext.virtualModel.customField")
+  .field("envVars", "envVars", {}, {})
   .scope("llm.prediction", builder =>
     builder
       .field(
@@ -47,7 +51,61 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
       .field("stopStrings", "stringArray", {}, [])
       .field("toolCallStopStrings", "stringArray", {}, [])
       .field("structured", "llamaStructuredOutput", {}, { type: "none" })
+      .scope("speculativeDecoding", builder =>
+        builder
+          .field(
+            "draftModel",
+            "speculativeDecodingDraftModel",
+            {
+              modelCentric: true,
+            },
+            "",
+          )
+          .field(
+            "minDraftLengthToConsider",
+            "numeric",
+            {
+              modelCentric: true,
+              min: 0,
+              int: true,
+              slider: { min: 0, max: 10, step: 1 },
+            },
+            0,
+          )
+          .field("numReuseTokens", "numeric", { modelCentric: true, min: 1, int: true }, 256)
+          .field(
+            "minContinueDraftingProbability",
+            "numeric",
+            {
+              modelCentric: true,
+              min: 0,
+              max: 1,
+              step: 0.01,
+              precision: 2,
+              slider: { min: 0, max: 1, step: 0.01 },
+            },
+            0.75,
+          )
+          .field(
+            "maxTokensToDraft",
+            "numeric",
+            { modelCentric: true, min: 1, int: true, slider: { min: 10, max: 30, step: 1 } },
+            16,
+          )
+          .field(
+            "numDraftTokensExact",
+            "numeric",
+            {
+              modelCentric: true,
+              min: 1,
+              int: true,
+              slider: { min: 1, max: 10, step: 1 },
+            },
+            2,
+          ),
+      )
       .field("tools", "toolUse", {}, { type: "none" })
+      .field("toolNaming", "toolNaming", {}, "removeSpecial")
       .field(
         "promptTemplate",
         "llmPromptTemplate",
@@ -97,6 +155,18 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
         "checkboxNumeric",
         { min: 0, max: 100, int: true },
         { checked: false, value: 0 },
+      )
+      .scope("reasoning", builder =>
+        builder.field(
+          "parsing",
+          "llmReasoningParsing",
+          {},
+          {
+            enabled: true,
+            startString: "<think>",
+            endString: "</think>",
+          },
+        ),
       )
       .scope("llama", builder =>
         builder
@@ -168,20 +238,22 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
         { int: true, min: -1, uncheckedHint: "config:seedUncheckedHint" },
         { checked: false, value: -1 },
       )
+      .field("offloadKVCacheToGpu", "boolean", {}, true)
+      .field(
+        "numCpuExpertLayersRatio",
+        "llamaAccelerationOffloadRatio",
+        { machineDependent: true, isExperimental: true, },
+        "off",
+      )
       .scope("llama", builder =>
         builder
           .scope("acceleration", builder =>
-            builder
-              .field(
-                "offloadRatio",
-                "llamaAccelerationOffloadRatio",
-                { machineDependent: true },
-                "max",
-              )
-              .field("mainGpu", "llamaAccelerationMainGpu", { machineDependent: true }, 0)
-              .field("tensorSplit", "llamaAccelerationTensorSplit", { machineDependent: true }, [
-                0,
-              ]),
+            builder.field(
+              "offloadRatio",
+              "llamaAccelerationOffloadRatio",
+              { machineDependent: true },
+              "max",
+            ),
           )
           .field("cpuThreadPoolSize", "numeric", { min: 1, machineDependent: true }, 4)
           .field("evalBatchSize", "numeric", { min: 1, int: true }, 512)
@@ -205,8 +277,33 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
           )
           .field("keepModelInMemory", "boolean", {}, true)
           .field("useFp16ForKVCache", "boolean", {}, true)
-          .field("tryMmap", "boolean", {}, true),
+          .field("tryMmap", "boolean", {}, true)
+          .field(
+            "kCacheQuantizationType",
+            "llamaCacheQuantizationType",
+            { isExperimental: true },
+            { checked: false, value: "f16" },
+          )
+          .field(
+            "vCacheQuantizationType",
+            "llamaCacheQuantizationType",
+            { isExperimental: true, warning: "config:llamaKvCacheQuantizationWarning" },
+            { checked: false, value: "f16" },
+          ),
+      )
+      .scope("mlx", builder =>
+        builder.field(
+          "kvCacheQuantization",
+          "mlxKvCacheQuantizationType",
+          { isExperimental: true },
+          { enabled: false, bits: 8, groupSize: 64, quantizedStart: 5000 },
+        ),
       ),
+  )
+  .scope("load", builder =>
+    builder
+      .field("gpuSplitConfig", "gpuSplitConfig", {}, defaultGPUSplitConfig)
+      .field("gpuStrictVramCap", "boolean", {}, false),
   )
   .scope("embedding.load", builder =>
     builder
@@ -220,17 +317,12 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
       .scope("llama", builder =>
         builder
           .scope("acceleration", builder =>
-            builder
-              .field(
-                "offloadRatio",
-                "llamaAccelerationOffloadRatio",
-                { machineDependent: true },
-                "max",
-              )
-              .field("mainGpu", "llamaAccelerationMainGpu", { machineDependent: true }, 0)
-              .field("tensorSplit", "llamaAccelerationTensorSplit", { machineDependent: true }, [
-                0,
-              ]),
+            builder.field(
+              "offloadRatio",
+              "llamaAccelerationOffloadRatio",
+              { machineDependent: true },
+              "max",
+            ),
           )
           .field("evalBatchSize", "numeric", { min: 1, int: true }, 512)
           .field(
@@ -281,6 +373,8 @@ export const llmSharedPredictionConfigSchematics = llmPredictionConfigSchematics
   "seed",
   "contextPrefill",
   "tools",
+  "toolNaming",
+  "reasoning.*",
 );
 
 export const llmLlamaPredictionConfigSchematics = llmSharedPredictionConfigSchematics.union(
@@ -295,6 +389,11 @@ export const llmLlamaPredictionConfigSchematics = llmSharedPredictionConfigSchem
     "minPSampling",
     "topPSampling",
     "logProbs",
+    "speculativeDecoding.draftModel",
+    "speculativeDecoding.minContinueDraftingProbability",
+    "speculativeDecoding.minDraftLengthToConsider",
+    "speculativeDecoding.maxTokensToDraft",
+    "speculativeDecoding.numReuseTokens",
   ),
 );
 
@@ -308,7 +407,14 @@ export const llmMlxPredictionConfigSchematics = llmSharedPredictionConfigSchemat
     "repeatPenalty",
     "minPSampling",
     "topPSampling",
+    "topKSampling",
+    "speculativeDecoding.draftModel",
+    "speculativeDecoding.numDraftTokensExact",
   ),
+);
+
+export const llmTransformersPredictionConfigSchematics = llmSharedPredictionConfigSchematics.union(
+  llmPredictionConfigSchematics.sliced("transformers.*"),
 );
 
 export const llmOnnxPredictionConfigSchematics = llmSharedPredictionConfigSchematics.union(
@@ -317,23 +423,38 @@ export const llmOnnxPredictionConfigSchematics = llmSharedPredictionConfigSchema
 
 export const llmMistralrsPredictionConfigSchematics = llmSharedPredictionConfigSchematics;
 
-export const llmLoadSchematics = globalConfigSchematics.scoped("llm.load");
+export const llmLoadSchematics = globalConfigSchematics
+  .scoped("llm.load")
+  .union(globalConfigSchematics.sliced("envVars"));
 
-export const llmSharedLoadConfigSchematics = llmLoadSchematics.sliced("contextLength", "seed");
-
-export const llmLlamaLoadConfigSchematics = llmSharedLoadConfigSchematics.union(
-  llmLoadSchematics.sliced("llama.*"),
+export const llmSharedLoadConfigSchematics = llmLoadSchematics.sliced(
+  "contextLength",
+  "seed",
+  "envVars",
 );
+
+const llamaLoadConfigSchematics = globalConfigSchematics.sliced("llama.load.*", "load.*");
+
+export const llmLlamaLoadConfigSchematics = llmSharedLoadConfigSchematics
+  .union(llmLoadSchematics.sliced("llama.*", "load.*", "offloadKVCacheToGpu"))
+  .union(llamaLoadConfigSchematics);
 
 export const llmMlxLoadConfigSchematics = llmSharedLoadConfigSchematics.union(
   llmLoadSchematics.sliced("mlx.*"),
+);
+
+export const llmTransformersLoadConfigSchematics = llmSharedLoadConfigSchematics.union(
+  llmLoadSchematics.sliced("transformers.*"),
 );
 
 export const llmOnnxLoadConfigSchematics = llmSharedLoadConfigSchematics.union(
   llmLoadSchematics.sliced("onnx.*"),
 );
 
-const llmLlamaMoeAdditionalLoadConfigSchematics = llmLoadSchematics.sliced("numExperts");
+const llmLlamaMoeAdditionalLoadConfigSchematics = llmLoadSchematics.sliced(
+  "numExperts",
+  "numCpuExpertLayersRatio",
+);
 
 export const llmLlamaMoeLoadConfigSchematics = llmLlamaLoadConfigSchematics.union(
   llmLlamaMoeAdditionalLoadConfigSchematics,
@@ -341,7 +462,9 @@ export const llmLlamaMoeLoadConfigSchematics = llmLlamaLoadConfigSchematics.unio
 
 export const llmMistralrsLoadConfigSchematics = llmSharedLoadConfigSchematics;
 
-export const embeddingLoadSchematics = globalConfigSchematics.scoped("embedding.load");
+export const embeddingLoadSchematics = globalConfigSchematics
+  .scoped("embedding.load")
+  .union(globalConfigSchematics.sliced("load.*"));
 
 export const embeddingSharedLoadConfigSchematics = embeddingLoadSchematics.sliced(
   "contextLength",
@@ -350,9 +473,9 @@ export const embeddingSharedLoadConfigSchematics = embeddingLoadSchematics.slice
 
 export const retrievalSchematics = globalConfigSchematics.scoped("retrieval");
 
-export const embeddingLlamaLoadConfigSchematics = embeddingSharedLoadConfigSchematics.union(
-  embeddingLoadSchematics.sliced("llama.*"),
-);
+export const embeddingLlamaLoadConfigSchematics = embeddingSharedLoadConfigSchematics
+  .union(embeddingLoadSchematics.sliced("llama.*"))
+  .union(llamaLoadConfigSchematics);
 
 export const emptyConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypesLibrary).build();
 
@@ -373,7 +496,12 @@ type ValueTypeMap =
 /**
  * Any config schematics that uses the value types defined in the type library.
  */
-export type TypedConfigSchematics = KVConfigSchematics<ValueTypeMap, any, any>;
+export type TypedConfigSchematics = KVConfigSchematics<ValueTypeMap, any>;
+
+/**
+ * Any field filter that uses the value types defined in the type library.
+ */
+export type TypedConfigFieldFilter = InferConfigFieldFilter<TypedConfigSchematics>;
 
 export type GlobalKVValueTypeMap = InferValueTypeMap<typeof kvValueTypesLibrary>;
 /**

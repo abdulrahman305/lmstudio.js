@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z, type ZodSchema } from "zod";
 import { type FileType, fileTypeSchema } from "./files/FileType.js";
 import { jsonSerializableSchema } from "./JSONSerializable.js";
 
@@ -47,28 +47,26 @@ export const chatMessagePartFileDataSchema = z.object({
 /**
  * @public
  */
-export interface ChatMessagePartSubPartFunctionCallRequestData {
+export interface FunctionToolCallRequest {
+  id?: string;
+  type: "function";
   arguments?: Record<string, any>;
   name: string;
 }
-export const chatMessagePartSubPartFunctionCallRequestDataSchema = z.object({
+export const functionToolCallRequestSchema = z.object({
+  id: z.string().optional(),
+  type: z.literal("function"),
   arguments: z.record(jsonSerializableSchema).optional(),
   name: z.string(),
-});
+}) as ZodSchema<FunctionToolCallRequest>;
 
 /**
  * @public
  */
-export interface ChatMessagePartSubPartToolCallRequest {
-  id?: string;
-  type: "function";
-  function: ChatMessagePartSubPartFunctionCallRequestData;
-}
-export const chatMessagePartSubPartToolCallRequestSchema = z.object({
-  id: z.string().optional(),
-  type: z.literal("function"),
-  function: chatMessagePartSubPartFunctionCallRequestDataSchema,
-});
+export type ToolCallRequest = FunctionToolCallRequest;
+export const toolCallRequestSchema = z.discriminatedUnion("type", [
+  functionToolCallRequestSchema as any,
+]) as ZodSchema<ToolCallRequest>;
 
 /**
  * @public
@@ -78,26 +76,32 @@ export interface ChatMessagePartToolCallRequestData {
   /**
    * Tool calls requested
    */
-  toolCallRequests: ChatMessagePartSubPartToolCallRequest[];
+  toolCallRequest: ToolCallRequest;
 }
 export const chatMessagePartToolCallRequestDataSchema = z.object({
   type: z.literal("toolCallRequest"),
-  toolCallRequests: z.array(chatMessagePartSubPartToolCallRequestSchema),
+  toolCallRequest: toolCallRequestSchema,
 });
+
+/**
+ * Represents the result of a tool call.
+ *
+ * @public
+ */
+export interface ToolCallResult {
+  content: string;
+  toolCallId?: string;
+}
+export const toolCallResultSchema = z.object({
+  content: z.string(),
+  toolCallId: z.string().optional(),
+}) as ZodSchema<ToolCallResult>;
 
 /**
  * @public
  */
-export interface ChatMessagePartToolCallResultData {
+export interface ChatMessagePartToolCallResultData extends ToolCallResult {
   type: "toolCallResult";
-  /**
-   * Result of a tool call
-   */
-  content: string;
-  /**
-   * The tool call ID that this result is for
-   */
-  toolCallId?: string;
 }
 export const chatMessagePartToolCallResultDataSchema = z.object({
   type: z.literal("toolCallResult"),

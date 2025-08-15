@@ -1,14 +1,21 @@
 import {
+  allowableEnvVarsSchema,
+  gpuSplitConfigSchema,
+  kvConfigFieldDependencySchema,
   llmContextOverflowPolicySchema,
   llmContextReferenceSchema,
   llmLlamaAccelerationOffloadRatioSchema,
+  llmLlamaCacheQuantizationTypeSchema,
   llmLlamaLogitBiasConfigSchema,
   llmLlamaMirostatSamplingConfigSchema,
+  llmMlxKvCacheQuantizationSchema,
   llmPromptTemplateSchema,
+  llmReasoningParsingSchema,
   llmStructuredPredictionSettingSchema,
   llmToolUseSettingSchema,
   modelDomainTypeSchema,
   retrievalChunkingMethodSchema,
+  toolNamingSchema,
 } from "@lmstudio/lms-shared-types";
 import { z } from "zod";
 import {
@@ -36,9 +43,11 @@ function quoteStringWithManualEscape(str: string | undefined, empty?: string) {
 }
 
 /**
+ * Builder for all the basic KV types.
+ *
  * @public
  */
-export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
+const baseKVValueTypesLibraryBuilder = new KVFieldValueTypesLibraryBuilder({
   /**
    * Display name of the field.
    */
@@ -53,6 +62,8 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
    *
    * An example would be prompt template. There is no point to configure prompt template when there
    * isn't a specific model.
+   *
+   * @experimental This field is experimental and may change in the future.
    */
   modelCentric: z.boolean().optional(),
   /**
@@ -60,18 +71,31 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
    * As a result, it will not be shown in the UI.
    *
    * An example would be context length for MLX, as you cannot change it.
+   *
+   * @experimental This field is experimental and may change in the future.
    */
   nonConfigurable: z.boolean().optional(),
+  /**
+   * A field can be marked as engineDoesNotSupport when when the engine running the model does not
+   * support the field.
+   *
+   * @experimental This field is experimental and may change in the future.
+   */
+  engineDoesNotSupport: z.boolean().optional(),
   /**
    * A field can be marked as machine dependent when its value is highly dependent on the machine
    * that is being used. When exporting the config, one may decide to not include machine dependent
    * fields by default.
    *
    * An example would be GPU offload settings.
+   *
+   * @experimental This field is experimental and may change in the future.
    */
   machineDependent: z.boolean().optional(),
   warning: z.string().optional(),
+  subtitle: z.string().optional(),
   isExperimental: z.boolean().optional(),
+  dependencies: z.array(kvConfigFieldDependencySchema).optional(),
 })
   .valueType("numeric", {
     paramType: {
@@ -115,66 +139,16 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       return value.toFixed(precision ?? 2);
     },
   })
-  .valueType("checkboxNumeric", {
-    paramType: {
-      min: z.number().optional(),
-      max: z.number().optional(),
-      step: z.number().optional(),
-      int: z.boolean().optional(),
-      uncheckedHint: z.string().optional(),
-      precision: z.number().int().nonnegative().optional(),
-      slider: z
-        .object({
-          min: z.number(),
-          max: z.number(),
-          step: z.number(),
-        })
-        .optional(),
-    },
-    schemaMaker: ({ min, max, int, precision }) => {
-      let numberSchema = z.number();
-      if (min !== undefined) {
-        numberSchema = numberSchema.min(min);
-      }
-      if (max !== undefined) {
-        numberSchema = numberSchema.max(max);
-      }
-      if (int) {
-        if (precision !== undefined) {
-          throw new Error("Cannot specify both int and precision.");
-        }
-        numberSchema = numberSchema.int();
-      }
-      return z.object({
-        checked: z.boolean(),
-        value: numberSchema,
-      });
-    },
-    effectiveEquals: (a, b) => {
-      if (a.checked !== b.checked) {
-        return false;
-      }
-      if (!a.checked) {
-        return true;
-      }
-      return a.value === b.value;
-    },
-    stringify: (value, { int, precision }, { t }) => {
-      if (!value.checked) {
-        return t("config:customInputs.checkboxNumeric.off", "OFF");
-      }
-      if (int) {
-        return String(Math.round(value.value));
-      }
-      return value.value.toFixed(precision ?? 2);
-    },
-  })
   .valueType("string", {
     paramType: {
       minLength: z.number().optional(),
       maxLength: z.number().optional(),
       isParagraph: z.boolean().optional(),
       isProtected: z.boolean().optional(),
+      /**
+       * If true, the string should match to a single token.
+       */
+      isToken: z.boolean().optional(),
       placeholder: z.string().optional(),
     },
     schemaMaker: ({ minLength, maxLength }) => {
@@ -225,7 +199,25 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
   })
   .valueType("select", {
     paramType: {
-      options: z.array(z.object({ value: z.string(), displayName: z.string() }).or(z.string())),
+      options: z
+        .array(z.object({ value: z.string().nonempty(), displayName: z.string() }).or(z.string()))
+        .refine(
+          options => {
+            // See if there are any duplicate values.
+            const values = new Set<string>();
+            for (const option of options) {
+              const value = typeof option === "string" ? option : option.value;
+              if (values.has(value)) {
+                return false;
+              }
+              values.add(value);
+            }
+            return true;
+          },
+          {
+            message: "Duplicate values in options.",
+          },
+        ),
     },
     schemaMaker: ({ options }) => {
       const allowedValues = new Set(
@@ -291,6 +283,101 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
         }
       }
       return quoted.join(", ");
+    },
+  });
+
+/**
+ * Basic key-value field value types library. These are the types that are exposed to plugins.
+ *
+ * @public
+ */
+export const basicKVValueTypesLibrary = baseKVValueTypesLibraryBuilder.build();
+
+/**
+ * The global key-value field value types library. This includes all the basic types and additional
+ * types that are used in the LM Studio application.
+ *
+ * @public
+ */
+export const kvValueTypesLibrary = baseKVValueTypesLibraryBuilder
+  .valueType("checkboxNumeric", {
+    paramType: {
+      min: z.number().optional(),
+      max: z.number().optional(),
+      step: z.number().optional(),
+      int: z.boolean().optional(),
+      uncheckedHint: z.string().optional(),
+      precision: z.number().int().nonnegative().optional(),
+      slider: z
+        .object({
+          min: z.number(),
+          max: z.number(),
+          step: z.number(),
+        })
+        .optional(),
+    },
+    schemaMaker: ({ min, max, int, precision }) => {
+      let numberSchema = z.number();
+      if (min !== undefined) {
+        numberSchema = numberSchema.min(min);
+      }
+      if (max !== undefined) {
+        numberSchema = numberSchema.max(max);
+      }
+      if (int) {
+        if (precision !== undefined) {
+          throw new Error("Cannot specify both int and precision.");
+        }
+        numberSchema = numberSchema.int();
+      }
+      return z.object({
+        checked: z.boolean(),
+        value: numberSchema,
+      });
+    },
+    effectiveEquals: (a, b) => {
+      if (a.checked !== b.checked) {
+        return false;
+      }
+      if (!a.checked) {
+        return true;
+      }
+      return a.value === b.value;
+    },
+    stringify: (value, { int, precision }, { t }) => {
+      if (!value.checked) {
+        return t("config:customInputs.checkboxNumeric.off", "OFF");
+      }
+      if (int) {
+        return String(Math.round(value.value));
+      }
+      return value.value.toFixed(precision ?? 2);
+    },
+  })
+  .valueType("numericArray", {
+    paramType: {
+      min: z.number().optional(),
+      max: z.number().optional(),
+      int: z.boolean().optional(),
+    },
+    schemaMaker: ({ min, max, int }) => {
+      let numberSchema = z.number();
+      if (min !== undefined) {
+        numberSchema = numberSchema.min(min);
+      }
+      if (max !== undefined) {
+        numberSchema = numberSchema.max(max);
+      }
+      if (int) {
+        numberSchema = numberSchema.int();
+      }
+      return z.array(numberSchema);
+    },
+    effectiveEquals: (a, b) => {
+      return a.length === b.length && a.every((v, i) => v === b[i]);
+    },
+    stringify: (value, { int }) => {
+      return value.map(v => (int ? String(Math.round(v)) : String(v))).join(", ");
     },
   })
   .valueType("contextOverflowPolicy", {
@@ -372,11 +459,7 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       }
       switch (a.type) {
         case "jinja":
-          return (
-            a.jinjaPromptTemplate?.bosToken === b.jinjaPromptTemplate?.bosToken &&
-            a.jinjaPromptTemplate?.eosToken === b.jinjaPromptTemplate?.eosToken &&
-            a.jinjaPromptTemplate?.template === b.jinjaPromptTemplate?.template
-          );
+          return a.jinjaPromptTemplate?.template === b.jinjaPromptTemplate?.template;
         case "manual":
           return (
             a.manualPromptTemplate?.beforeSystem === b.manualPromptTemplate?.beforeSystem &&
@@ -398,10 +481,6 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
           const lead =
             `${t("config:customInputs.llmPromptTemplate.type", "Type")}: ` +
             `${t("config:customInputs.llmPromptTemplate.types.jinja/label", "Jinja")}\n` +
-            `${t("config:customInputs.llmPromptTemplate.jinja.bosToken/label", "BOS Token")}: ` +
-            `${value.jinjaPromptTemplate?.bosToken}\n` +
-            `${t("config:customInputs.llmPromptTemplate.jinja.eosToken/label", "EOS Token")}: ` +
-            `${value.jinjaPromptTemplate?.eosToken}\n` +
             `${t("config:customInputs.llmPromptTemplate.jinja.template/label", "Template")}: `;
           if (desiredLength === undefined) {
             return lead + value.jinjaPromptTemplate?.template;
@@ -444,16 +523,50 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       }
     },
   })
+  .valueType("llmReasoningParsing", {
+    paramType: {},
+    schemaMaker: () => {
+      return llmReasoningParsingSchema;
+    },
+    effectiveEquals: (a, b) => {
+      return a.startString === b.startString && a.endString === b.endString;
+    },
+    stringify: value => {
+      return JSON.stringify(value, null, 2); // TODO: pretty print
+    },
+  })
   .valueType("llamaStructuredOutput", {
     paramType: {},
     schemaMaker: () => {
       return llmStructuredPredictionSettingSchema;
     },
     effectiveEquals: (a, b) => {
-      return deepEquals(a, b); // TODO: more performant comparison
+      if (a.type === "json" && b.type === "json") {
+        return deepEquals(a, b);
+      } else if (a.type === "none" && b.type === "none") {
+        return true;
+      } else {
+        return false;
+      }
     },
     stringify: value => {
       return JSON.stringify(value, null, 2); // TODO: pretty print
+    },
+  })
+  .valueType("speculativeDecodingDraftModel", {
+    paramType: {},
+    schemaMaker: () => {
+      // Empty string means no speculative decoding.
+      return z.string();
+    },
+    effectiveEquals: (a, b) => {
+      return a === b;
+    },
+    stringify: (value, _typeParam, { t }) => {
+      if (value === "") {
+        return t("config:customInputs.speculativeDecodingDraftModel.off", "OFF");
+      }
+      return value;
     },
   })
   .valueType("toolUse", {
@@ -466,6 +579,18 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
     },
     stringify: value => {
       return JSON.stringify(value, null, 2); // TODO: pretty print
+    },
+  })
+  .valueType("toolNaming", {
+    paramType: {},
+    schemaMaker: () => {
+      return toolNamingSchema;
+    },
+    effectiveEquals: (a, b) => {
+      return a === b;
+    },
+    stringify: value => {
+      return value;
     },
   })
   .valueType("llamaAccelerationOffloadRatio", {
@@ -497,30 +622,6 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       return (value * 100).toFixed(0) + "%";
     },
   })
-  .valueType("llamaAccelerationMainGpu", {
-    paramType: {},
-    schemaMaker: () => {
-      return z.number().int().nonnegative();
-    },
-    effectiveEquals: (a, b) => {
-      return a === b;
-    },
-    stringify: value => {
-      return String(value); // TODO: Show GPU name
-    },
-  })
-  .valueType("llamaAccelerationTensorSplit", {
-    paramType: {},
-    schemaMaker: () => {
-      return z.array(z.number().nonnegative());
-    },
-    effectiveEquals: (a, b) => {
-      return deepEquals(a, b); // TODO: more performant comparison
-    },
-    stringify: value => {
-      return value.join(", "); // TODO: Better display
-    },
-  })
   .valueType("llamaMirostatSampling", {
     paramType: {},
     schemaMaker: () => {
@@ -545,6 +646,50 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       return JSON.stringify(value, null, 2); // TODO: pretty print
     },
   })
+  .valueType("llamaCacheQuantizationType", {
+    paramType: {},
+    schemaMaker: () => {
+      return z.object({
+        checked: z.boolean(),
+        value: llmLlamaCacheQuantizationTypeSchema,
+      });
+    },
+    effectiveEquals: (a, b) => {
+      if (a.checked !== b.checked) {
+        return false;
+      }
+      if (!a.checked) {
+        return true;
+      }
+      return a.value === b.value;
+    },
+    stringify: (value, _typeParam, { t }) => {
+      if (!value.checked) {
+        return t("config:customInputs.llamaCacheQuantizationType.off", "OFF");
+      }
+      return value.value;
+    },
+  })
+  .valueType("mlxKvCacheQuantizationType", {
+    paramType: {},
+    schemaMaker: () => {
+      return llmMlxKvCacheQuantizationSchema;
+    },
+    effectiveEquals: (a, b) => {
+      if (a.enabled !== b.enabled) {
+        return false;
+      }
+      if (!a.enabled) {
+        return true;
+      }
+      return (
+        a.bits === b.bits && a.groupSize === b.groupSize && a.quantizedStart === b.quantizedStart
+      );
+    },
+    stringify: value => {
+      return JSON.stringify(value, null, 2); // TODO: pretty print
+    },
+  })
   .valueType("retrievalChunkingMethod", {
     paramType: {},
     schemaMaker: () => {
@@ -557,6 +702,30 @@ export const kvValueTypesLibrary = new KVFieldValueTypesLibraryBuilder({
       return JSON.stringify(value, null, 2); // TODO: pretty print
     },
   })
+  .valueType("envVars", {
+    paramType: {},
+    schemaMaker: () => {
+      return allowableEnvVarsSchema;
+    },
+    effectiveEquals: (a, b) => {
+      return deepEquals(a, b);
+    },
+    stringify: value => {
+      return JSON.stringify(value, null, 2);
+    },
+  })
+  .valueType("gpuSplitConfig", {
+    paramType: {},
+    schemaMaker: () => {
+      return gpuSplitConfigSchema;
+    },
+    effectiveEquals: (a, b) => {
+      return deepEquals(a, b);
+    },
+    stringify: value => {
+      return JSON.stringify(value, null, 2);
+    },
+  })
   .build();
 
 export type KVValueTypeDef = InferKVValueTypeDef<typeof kvValueTypesLibrary>;
@@ -564,10 +733,18 @@ export type KVValueTypeDef = InferKVValueTypeDef<typeof kvValueTypesLibrary>;
  * @public
  */
 export type GlobalKVValueTypesLibrary = typeof kvValueTypesLibrary;
+export type BasicKVValueTypesLibrary = typeof basicKVValueTypesLibrary;
 /**
  * @public
  */
 export type GlobalKVFieldValueTypeLibraryMap =
   GlobalKVValueTypesLibrary extends KVFieldValueTypeLibrary<infer TKVFieldValueTypeLibraryMap>
+    ? TKVFieldValueTypeLibraryMap
+    : never;
+/**
+ * @public
+ */
+export type BasicKVFieldValueTypeLibraryMap =
+  BasicKVValueTypesLibrary extends KVFieldValueTypeLibrary<infer TKVFieldValueTypeLibraryMap>
     ? TKVFieldValueTypeLibraryMap
     : never;

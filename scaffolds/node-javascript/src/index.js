@@ -18,7 +18,7 @@ async function printDownloadedModels() {
 
   // Limit to printing 5 models
   for (const model of downloadedModels.slice(0, 5)) {
-    console.log(`  - ${model.path} (${model.architecture})`);
+    console.log(`  - ${model.modelKey} (${model.displayName})`);
   }
   if (downloadedModels.length > 5) {
     console.log(`    (... and ${downloadedModels.length - 5} more)`);
@@ -34,16 +34,16 @@ async function printLoadedModels() {
     process.exit(0);
   }
   for (const model of loadedLLMs) {
-    console.log(`  - ${model.identifier}`);
+    console.log(`  - ${model.identifier} (${model.displayName})`);
   }
   console.log(); // Create an empty line
 }
 
 async function predictWithAnyModel() {
-  const model = await client.llm.getAny();
+  const model = await client.llm.model();
   const prompt = "The meaning of life is";
   const prediction = model.complete(prompt, {
-    maxPredictedTokens: 100,
+    maxTokens: 100,
     temperature: 0.7,
   });
   process.stdout.write(prompt); // Print the prompt

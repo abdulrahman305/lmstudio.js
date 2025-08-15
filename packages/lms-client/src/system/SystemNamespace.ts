@@ -9,8 +9,25 @@ import { type SystemPort } from "@lmstudio/lms-external-backend-interfaces";
 import {
   backendNotificationSchema,
   type BackendNotification,
-  type DownloadedModel,
+  type EmbeddingModelInfo,
+  type LLMInfo,
+  type ModelInfo,
 } from "@lmstudio/lms-shared-types";
+import { z } from "zod";
+
+const startHttpServerOptsSchema = z.object({
+  port: z
+    .number()
+    .int()
+    .min(1)
+    .max(65535)
+    .describe("Port to run the API server on. Must be between 1 and 65535."),
+  cors: z
+    .boolean()
+    .describe("Enable CORS on the API server. Allows any website to access the server."),
+});
+
+type StartHttpServerOpts = z.infer<typeof startHttpServerOptsSchema>;
 
 /** @public */
 export class SystemNamespace {
@@ -28,10 +45,26 @@ export class SystemNamespace {
    * List all downloaded models.
    * @public
    */
-  public async listDownloadedModels(): Promise<Array<DownloadedModel>> {
-    return this.systemPort.callRpc("listDownloadedModels", undefined, {
+  public async listDownloadedModels(): Promise<Array<ModelInfo>>;
+  public async listDownloadedModels(domain: "llm"): Promise<Array<LLMInfo>>;
+  public async listDownloadedModels(domain: "embedding"): Promise<Array<EmbeddingModelInfo>>;
+  public async listDownloadedModels(domain?: "llm" | "embedding"): Promise<Array<ModelInfo>> {
+    const stack = getCurrentStack(1);
+    domain = this.validator.validateMethodParamOrThrow(
+      "client.system",
+      "listDownloadedModels",
+      "domain",
+      z.union([z.literal("llm"), z.literal("embedding"), z.undefined()]),
+      domain,
+      stack,
+    );
+    const models = await this.systemPort.callRpc("listDownloadedModels", undefined, {
       stack: getCurrentStack(1),
     });
+    if (domain === undefined) {
+      return models;
+    }
+    return models.filter(model => model.type === domain);
   }
   public async whenDisconnected(): Promise<void> {
     const stack = getCurrentStack(1);
@@ -53,5 +86,72 @@ export class SystemNamespace {
     );
 
     await this.systemPort.callRpc("notify", notification, { stack });
+  }
+  public async getLMStudioVersion(): Promise<{ version: string; build: number }> {
+    const stack = getCurrentStack(1);
+    return await this.systemPort.callRpc("version", undefined, { stack });
+  }
+
+  /**
+   * Sets an experiment flags for LM Studio. This is an unstable API and may change without notice.
+   *
+   * @experimental
+   */
+  public async unstable_setExperimentFlag(flag: string, value: boolean) {
+    const stack = getCurrentStack(1);
+    [flag, value] = this.validator.validateMethodParamsOrThrow(
+      "client.system",
+      "setExperimentFlag",
+      ["flag", "value"],
+      [z.string(), z.boolean()],
+      [flag, value],
+      stack,
+    );
+    await this.systemPort.callRpc("setExperimentFlag", { code: flag, value }, { stack });
+  }
+
+  /**
+   * Gets all experiment flags for LM Studio. This is an unstable API and may change without notice.
+   *
+   * @experimental
+   */
+  public async unstable_getExperimentFlags(): Promise<Array<string>> {
+    const stack = getCurrentStack(1);
+    return await this.systemPort.callRpc("getExperimentFlags", undefined, { stack });
+  }
+
+  /**
+   * Starts the API server on the specified port.
+   *
+   * @experimental
+   */
+  public async startHttpServer(opts: StartHttpServerOpts) {
+    const stack = getCurrentStack(1);
+
+    opts = this.validator.validateMethodParamOrThrow(
+      "client.system",
+      "startHttpServer",
+      "args",
+      startHttpServerOptsSchema,
+      opts,
+    );
+
+    return await this.systemPort.callRpc(
+      "startHttpServer",
+      { port: opts.port, cors: opts.cors },
+      {
+        stack,
+      },
+    );
+  }
+
+  /**
+   * Stops the API server if it is running.
+   *
+   * @experimental
+   */
+  public async stopHttpServer() {
+    const stack = getCurrentStack(1);
+    return await this.systemPort.callRpc("stopHttpServer", undefined, { stack });
   }
 }

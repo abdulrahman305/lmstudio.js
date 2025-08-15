@@ -1,25 +1,28 @@
 {
   "name": "@lmstudio/lms-client",
-  "version": "0.8.2",
+  "version": "1.5.0",
   "description": "",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/types/index.d.ts",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc --build",
+    "clean": "shx rm -rf ./dist ./tsconfig.tsbuildinfo"
   },
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@lmstudio/lms-common": "^0.7.3",
-    "@lmstudio/lms-external-backend-interfaces": "^0.2.3",
-    "@lmstudio/lms-isomorphic": "^0.4.2",
-    "@lmstudio/lms-kv-config": "^0.2.1",
-    "@lmstudio/lms-shared-types": "^0.6.1",
+    "@lmstudio/lms-common": "^0.8.9",
+    "@lmstudio/lms-external-backend-interfaces": "^0.5.0",
+    "@lmstudio/lms-isomorphic": "^0.4.6",
+    "@lmstudio/lms-kv-config": "^0.2.15",
+    "@lmstudio/lms-shared-types": "^0.6.14",
     "boxen": "^5.1.2",
     "chalk": "^4.1.2",
+    "jsonschema": "^1.5.0",
     "process": "^0.11.10",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.22.5"
   },
   "exports": {
     ".": {
@@ -35,5 +38,5 @@
     "./dist/esm/**/*.js",
     "./dist/types/**/*.d.ts"
   ],
-  "gitHead": "941995f06f9351b6e6970dc190f89385805cef7f"
+  "gitHead": "d95ce2feb067b4eec446c673155631ee1734e982"
 }

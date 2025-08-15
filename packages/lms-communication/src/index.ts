@@ -4,6 +4,10 @@ export {
   BackendInterfaceWithContext,
   ChannelEndpoint,
   ChannelEndpointsSpecBase,
+  ExtractBackendInterfaceChannelEndpoints,
+  ExtractBackendInterfaceRpcEndpoints,
+  ExtractBackendInterfaceSignalEndpoints,
+  ExtractBackendInterfaceWritableSignalEndpoints,
   RpcEndpoint,
   RpcEndpointsSpecBase,
   SignalEndpoint,
@@ -11,12 +15,18 @@ export {
   WritableSignalEndpoint,
   WritableSignalEndpointsSpecBase,
 } from "./BackendInterface.js";
-export { Channel } from "./Channel.js";
 export {
-  SerializationType,
-  SerializedOpaque,
+  Channel,
+  InferChannelClientToServerPacketType,
+  InferChannelServerToClientPacketType,
+  InferClientChannelType,
+  InferServerChannelType,
+} from "./Channel.js";
+export {
   deserialize,
+  SerializationType,
   serialize,
+  SerializedOpaque,
   serializedOpaqueSchema,
 } from "./serialization.js";
 export { KEEP_ALIVE_INTERVAL, KEEP_ALIVE_TIMEOUT } from "./timeoutConstants.js";

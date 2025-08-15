@@ -1,11 +1,11 @@
-import { type SimpleLogger } from "@lmstudio/lms-common";
+import { type BufferedEvent, type SimpleLogger } from "@lmstudio/lms-common";
 import { authPacketSchema, type BackendInterface } from "@lmstudio/lms-communication";
-import type { IpcMainEvent } from "electron";
 import { type ClientHolder } from "./AuthenticatedWsServer.js";
 import { type Authenticator, type Context, type ContextCreator } from "./Authenticator.js";
 import { IpcServer, type RegisterIpcListener } from "./IpcServer.js";
 import { IpcServerTransport } from "./IpcServerTransport.js";
 import { ServerPort } from "./ServerPort.js";
+import { type IpcMainEvent } from "./electronTypes.js";
 
 interface Opts<TContext extends Context> {
   backendInterface: BackendInterface<TContext>;
@@ -44,12 +44,17 @@ export class AuthenticatedIpcServer<TContext extends Context> extends IpcServer<
     }
     let holder: ClientHolder;
     let contextCreator: ContextCreator<TContext>;
+    let authenticationRevokedEvent: BufferedEvent<void>;
     try {
-      ({ holder, contextCreator } = await this.authenticator.authenticate(parsed));
+      ({ holder, contextCreator, authenticationRevokedEvent } =
+        await this.authenticator.authenticate(parsed));
     } catch (error) {
       this.logger.warn("Failed to authenticate client:", error);
       return;
     }
+    authenticationRevokedEvent.subscribeOnce(() => {
+      this.logger.warn("Authentication revoked. This is unexpected.");
+    });
     const serverPort = new ServerPort(
       this.backendInterface,
       contextCreator,

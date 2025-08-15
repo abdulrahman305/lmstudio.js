@@ -1,6 +1,6 @@
 {
   "name": "@lmstudio/cli",
-  "version": "0.0.31",
+  "version": "0.0.47",
   "description": "LM Studio CLI",
   "main": "dist/index.js",
   "scripts": {
@@ -12,7 +12,8 @@
     "make-bin:darwin": "bash make-bin-darwin.sh",
     "make-bin": "run-script-os",
     "make": "npm run build && npm run make-bin",
-    "watch": "rollup -wc"
+    "watch": "rollup -wc",
+    "clean": "shx rm -rf ./dist ./tsconfig.tsbuildinfo"
   },
   "files": [
     "dist/index.js"
@@ -20,11 +21,11 @@
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@lmstudio/lms-cli": "^0.3.27"
+    "@lmstudio/lms-cli": "^0.3.43"
   },
   "devDependencies": {
     "postject": "^1.0.0-alpha.6",
     "run-script-os": "^1.1.6"
   },
-  "gitHead": "941995f06f9351b6e6970dc190f89385805cef7f"
+  "gitHead": "d95ce2feb067b4eec446c673155631ee1734e982"
 }

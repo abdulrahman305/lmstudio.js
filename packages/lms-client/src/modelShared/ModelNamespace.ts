@@ -15,8 +15,9 @@ import {
   reasonableKeyStringSchema,
   type KVConfig,
   type LogLevel,
-  type ModelDescriptor,
   type ModelDomainType,
+  type ModelInfoBase,
+  type ModelInstanceInfoBase,
   type ModelQuery,
   type ModelSpecifier,
 } from "@lmstudio/lms-shared-types";
@@ -68,6 +69,13 @@ export interface BaseLoadModelOpts<TLoadModelConfig> {
   signal?: AbortSignal;
 
   /**
+   * Idle time to live (TTL) in seconds. If specified, when the model is not used for the specified number
+   * of seconds, the model will be automatically unloaded. If the model is used before the TTL, the
+   * timer will be reset.
+   */
+  ttl?: number;
+
+  /**
    * Controls the logging of model loading progress.
    *
    * - If set to `true`, logs progress at the "info" level.
@@ -98,6 +106,7 @@ function makeLoadModelOptsSchema<TLoadModelConfig>(
     identifier: z.string().optional(),
     config: loadModelConfigSchema.optional(),
     signal: z.instanceof(AbortSignal).optional(),
+    ttl: z.number().optional(),
     verbose: z.union([z.boolean(), logLevelSchema]).optional(),
     onProgress: z.function().optional(),
   });
@@ -110,10 +119,15 @@ function makeLoadModelOptsSchema<TLoadModelConfig>(
  */
 export abstract class ModelNamespace<
   /** @internal */
-  TClientPort extends BaseModelPort,
+  TClientPort extends BaseModelPort<TModelInstanceInfo, TModelInfo>,
   TLoadModelConfig,
-  TDynamicHandle extends DynamicHandle<// prettier-ignore
-  /** @internal */ TClientPort>,
+  TModelInstanceInfo extends ModelInstanceInfoBase,
+  TModelInfo extends ModelInfoBase,
+  TDynamicHandle extends DynamicHandle<
+    // prettier-ignore
+    /** @internal */ TClientPort,
+    TModelInstanceInfo
+  >,
   TSpecificModel,
 > {
   /**
@@ -139,8 +153,7 @@ export abstract class ModelNamespace<
   /** @internal */
   protected abstract createDomainSpecificModel(
     port: TClientPort,
-    instanceReference: string,
-    descriptor: ModelDescriptor,
+    info: TModelInstanceInfo,
     validator: Validator,
     logger: SimpleLogger,
   ): TSpecificModel;
@@ -173,56 +186,38 @@ export abstract class ModelNamespace<
     protected readonly validator: Validator,
   ) {}
   /**
-   * Load a model for inferencing. The first parameter is the model path. The second parameter is an
-   * optional object with additional options. By default, the model is loaded with the default
-   * preset (as selected in LM Studio) and the verbose option is set to true.
-   *
-   * When specifying the model path, you can use the following format:
-   *
-   * `<publisher>/<repo>[/model_file]`
-   *
-   * If `model_file` is not specified, the first (sorted alphabetically) model in the repository is
-   * loaded.
+   * Load a model for inferencing. The first parameter is the model key. The second parameter is an
+   * optional object with additional options.
    *
    * To find out what models are available, you can use the `lms ls` command, or programmatically
    * use the `client.system.listDownloadedModels` method.
    *
    * Here are some examples:
    *
-   * Loading Llama 3:
+   * Loading Llama 3.2:
    *
    * ```typescript
-   * const model = await client.llm.load("lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF");
+   * const model = await client.llm.load("llama-3.2-3b-instruct");
    * ```
-   *
-   * Loading a specific quantization (q4_k_m) of Llama 3:
-   *
-   * ```typescript
-   * const model = await client.llm.load("lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf");
-   * ```
-   *
-   * To unload the model, you can use the `client.llm.unload` method. Additionally, when the last
-   * client with the same `clientIdentifier` disconnects, all models loaded by that client will be
-   * automatically unloaded.
    *
    * Once loaded, see {@link LLMDynamicHandle} or {@link EmbeddingDynamicHandle} for how to use the
    * model for inferencing or other things you can do with the model.
    *
-   * @param path - The path of the model to load.
+   * @param modelKey - The path of the model to load.
    * @param opts - Options for loading the model.
    * @returns A promise that resolves to the model that can be used for inferencing
    */
   public async load(
-    path: string,
+    modelKey: string,
     opts: BaseLoadModelOpts<TLoadModelConfig> = {},
   ): Promise<TSpecificModel> {
     const stack = getCurrentStack(1);
-    [path, opts] = this.validator.validateMethodParamsOrThrow(
+    [modelKey, opts] = this.validator.validateMethodParamsOrThrow(
       `client.${this.namespace}`,
       "load",
-      ["path", "opts"],
+      ["modelKey", "opts"],
       [reasonableKeyStringSchema, this.getLoadModelOptsSchema()],
-      [path, opts],
+      [modelKey, opts],
       stack,
     );
     const { identifier, signal, verbose = "info", config, onProgress } = opts;
@@ -242,13 +237,14 @@ export abstract class ModelNamespace<
       );
     }
 
-    let fullPath: string = path;
+    let fullPath: string = modelKey;
 
     const channel = this.port.createChannel(
       "loadModel",
       {
-        path,
+        modelKey,
         identifier,
+        ttlMs: opts.ttl === undefined ? undefined : opts.ttl * 1000,
         loadConfigStack: singleLayerKVConfigStackOf(
           "apiOverride",
           this.loadConfigToKVConfig(config ?? this.defaultLoadConfig),
@@ -257,22 +253,24 @@ export abstract class ModelNamespace<
       message => {
         switch (message.type) {
           case "resolved": {
-            fullPath = message.fullPath;
+            fullPath = message.info.modelKey;
             if (message.ambiguous !== undefined) {
               this.logger.warn(text`
-                Multiple models found for path ${path}:
+                Multiple models found for key ${modelKey}:
 
                 ${message.ambiguous.map(x => ` - ${x}`).join("\n")}
 
                 Using the first one.
               `);
             }
-            this.logger.logAtLevel(
-              verboseLevel,
-              text`
-                Start loading model ${fullPath}...
-              `,
-            );
+            if (verbose) {
+              this.logger.logAtLevel(
+                verboseLevel,
+                text`
+                  Start loading model ${fullPath}...
+                `,
+              );
+            }
             break;
           }
           case "success": {
@@ -285,13 +283,7 @@ export abstract class ModelNamespace<
               );
             }
             resolve(
-              this.createDomainSpecificModel(
-                this.port,
-                message.instanceReference,
-                { identifier: message.identifier, path },
-                this.validator,
-                this.logger,
-              ),
+              this.createDomainSpecificModel(this.port, message.info, this.validator, this.logger),
             );
             break;
           }
@@ -317,10 +309,23 @@ export abstract class ModelNamespace<
     );
 
     channel.onError.subscribeOnce(reject);
-    signal?.addEventListener("abort", () => {
-      channel.send({ type: "cancel" });
-      reject(signal.reason);
-    });
+
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        // If the signal is already aborted, we should reject immediately.
+        channel.send({ type: "cancel" });
+        reject(signal.reason);
+      } else {
+        signal.addEventListener(
+          "abort",
+          () => {
+            channel.send({ type: "cancel" });
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      }
+    }
 
     return await promise;
   }
@@ -347,102 +352,18 @@ export abstract class ModelNamespace<
   /**
    * List all the currently loaded models.
    */
-  public listLoaded(): Promise<Array<ModelDescriptor>> {
+  public async listLoaded(): Promise<Array<TSpecificModel>> {
     const stack = getCurrentStack(1);
-    return this.port.callRpc("listLoaded", undefined, { stack });
-  }
-
-  /**
-   * Get a specific model that satisfies the given query. The returned model is tied to the specific
-   * model at the time of the call.
-   *
-   * For more information on the query, see {@link ModelQuery}.
-   *
-   * @example
-   *
-   * If you have loaded a model with the identifier "my-model", you can use it like this:
-   *
-   * ```ts
-   * const model = await client.llm.get({ identifier: "my-model" });
-   * const prediction = model.complete("...");
-   * ```
-   *
-   * Or just
-   *
-   * ```ts
-   * const model = await client.llm.get("my-model");
-   * const prediction = model.complete("...");
-   * ```
-   *
-   * @example
-   *
-   * Use the Gemma 2B IT model (given it is already loaded elsewhere):
-   *
-   * ```ts
-   * const model = await client.llm.get({ path: "lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF" });
-   * const prediction = model.complete("...");
-   * ```
-   */
-  public get(query: ModelQuery): Promise<TSpecificModel>;
-  /**
-   * Get a specific model by its identifier. The returned model is tied to the specific model at the
-   * time of the call.
-   *
-   * @example
-   *
-   * If you have loaded a model with the identifier "my-model", you can use it like this:
-   *
-   * ```ts
-   * const model = await client.llm.get("my-model");
-   * const prediction = model.complete("...");
-   * ```
-   *
-   */
-  public get(path: string): Promise<TSpecificModel>;
-  public async get(param: string | ModelQuery): Promise<TSpecificModel> {
-    const stack = getCurrentStack(1);
-    this.validator.validateMethodParamOrThrow(
-      `client.${this.namespace}`,
-      "get",
-      "param",
-      z.union([reasonableKeyStringSchema, modelQuerySchema]),
-      param,
-      stack,
-    );
-    let query: ModelQuery;
-    if (typeof param === "string") {
-      query = {
-        identifier: param,
-      };
-    } else {
-      query = param;
-    }
-    query.domain = this.namespace;
-    const info = await this.port.callRpc(
-      "getModelInfo",
-      {
-        specifier: {
-          type: "query",
-          query,
-        },
-        throwIfNotFound: true,
-      },
-      { stack },
-    );
-    if (info === undefined) {
-      throw new Error("Backend should have thrown.");
-    }
-    return this.createDomainSpecificModel(
-      this.port,
-      info.instanceReference,
-      info.descriptor,
-      this.validator,
-      new SimpleLogger("LLMSpecificModel", this.logger),
+    const infos = await this.port.callRpc("listLoaded", undefined, { stack });
+    return infos.map(info =>
+      this.createDomainSpecificModel(this.port, info, this.validator, this.logger),
     );
   }
 
-  public async getAny() {
-    const stack = getCurrentStack(1);
+  /**
+   * Get any loaded model of this domain.
+   */
+  private async getAny(stack: string) {
     const info = await this.port.callRpc(
       "getModelInfo",
       { specifier: { type: "query", query: {} }, throwIfNotFound: true },
@@ -453,10 +374,9 @@ export abstract class ModelNamespace<
     }
     return this.createDomainSpecificModel(
       this.port,
-      info.instanceReference,
-      info.descriptor,
+      info,
       this.validator,
-      new SimpleLogger("LLMSpecificModel", this.logger),
+      new SimpleLogger("LLM", this.logger),
     );
   }
 
@@ -465,12 +385,12 @@ export abstract class ModelNamespace<
    *
    * For more information on the query, see {@link ModelQuery}.
    *
-   * Note: The returned `LLMModel` is not tied to any specific loaded model. Instead, it represents
-   * a "handle for a model that satisfies the given query". If the model that satisfies the query is
-   * unloaded, the `LLMModel` will still be valid, but any method calls on it will fail. And later,
-   * if a new model is loaded that satisfies the query, the `LLMModel` will be usable again.
+   * Note: The returned handle is not tied to any specific loaded model. Instead, it represents a
+   * "handle for a model that satisfies the given query". If the model that satisfies the query is
+   * unloaded, the handle will still be valid, but any method calls on it will fail. And later, if a
+   * new model is loaded that satisfies the query, the handle will be usable again.
    *
-   * You can use {@link LLMDynamicHandle#getModelInfo} to get information about the model that is
+   * You can use {@link DynamicHandle#getModelInfo} to get information about the model that is
    * currently associated with this handle.
    *
    * @example
@@ -497,12 +417,12 @@ export abstract class ModelNamespace<
   /**
    * Get a dynamic model handle by its identifier.
    *
-   * Note: The returned `LLMModel` is not tied to any specific loaded model. Instead, it represents
-   * a "handle for a model with the given identifier". If the model with the given identifier is
-   * unloaded, the `LLMModel` will still be valid, but any method calls on it will fail. And later,
-   * if a new model is loaded with the same identifier, the `LLMModel` will be usable again.
+   * Note: The returned handle is not tied to any specific loaded model. Instead, it represents a
+   * "handle for a model with the given identifier". If the model with the given identifier is
+   * unloaded, the handle will still be valid, but any method calls on it will fail. And later, if a
+   * new model is loaded with the same identifier, the handle will be usable again.
    *
-   * You can use {@link LLMDynamicHandle#getModelInfo} to get information about the model that is
+   * You can use {@link DynamicHandle#getModelInfo} to get information about the model that is
    * currently associated with this handle.
    *
    * @example
@@ -583,27 +503,44 @@ export abstract class ModelNamespace<
 
   /**
    * Get a model by its identifier. If no model is loaded with such identifier, load a model with
-   * the given auto identifier. You can find a model's auto identifier by right-clicking the model
-   * in My Models page and selecting "Copy Default Identifier".
+   * the given key. This is the recommended way of getting a model to work with.
    *
+   * For example, to use the DeepSeek r1 distill of Llama 8B:
+   *
+   * ```typescript
+   * const model = await client.llm.model("deepseek-r1-distill-llama-8b");
+   * ```
    */
-  public async getOrLoad(
-    autoIdentifier: string,
+  public async model(
+    modelKey: string,
+    opts?: BaseLoadModelOpts<TLoadModelConfig>,
+  ): Promise<TSpecificModel>;
+  /**
+   * Get any loaded model of this domain. If you want to use a specific model, pass in the model key
+   * as a parameter.
+   */
+  public async model(): Promise<TSpecificModel>;
+  public async model(
+    modelKey?: string,
     opts: BaseLoadModelOpts<TLoadModelConfig> = {},
   ): Promise<TSpecificModel> {
     const stack = getCurrentStack(1);
-    [autoIdentifier, opts] = this.validator.validateMethodParamsOrThrow(
+    if (modelKey === undefined) {
+      // We want to get any loaded model.
+      return await this.getAny(stack);
+    }
+    [modelKey, opts] = this.validator.validateMethodParamsOrThrow(
       `client.${this.namespace}`,
-      "getOrLoad",
-      ["autoIdentifier", "opts"],
+      "model",
+      ["modelKey", "opts"],
       [reasonableKeyStringSchema, this.getLoadModelOptsSchema()],
-      [autoIdentifier, opts],
+      [modelKey, opts],
       stack,
     );
     const { identifier, signal, verbose = "info", config, onProgress } = opts;
 
     if (identifier !== undefined) {
-      throw new Error("The identifier option is not allowed in getOrLoad.");
+      throw new Error("The identifier option is not allowed when using `.model`.");
     }
     let lastVerboseCallTime = 0;
 
@@ -615,7 +552,8 @@ export abstract class ModelNamespace<
     const channel = this.port.createChannel(
       "getOrLoad",
       {
-        identifier: autoIdentifier,
+        identifier: modelKey,
+        loadTtlMs: opts.ttl === undefined ? undefined : opts.ttl * 1000,
         loadConfigStack: singleLayerKVConfigStackOf(
           "apiOverride",
           this.loadConfigToKVConfig(config ?? this.defaultLoadConfig),
@@ -625,14 +563,20 @@ export abstract class ModelNamespace<
         switch (message.type) {
           case "alreadyLoaded": {
             return resolve(
-              this.createDomainSpecificModel(
-                this.port,
-                message.instanceReference,
-                { identifier: message.identifier, path: message.fullPath },
-                this.validator,
-                this.logger,
-              ),
+              this.createDomainSpecificModel(this.port, message.info, this.validator, this.logger),
             );
+          }
+          case "unloadingOtherJITModel": {
+            if (verbose) {
+              this.logger.logAtLevel(
+                verboseLevel,
+                text`
+                  Unloading other JIT model ${message.info.modelKey}. (You can disable this behavior
+                  by going to LM Studio -> Settings -> Developer -> Turn OFF JIT models auto-evict)
+                `,
+              );
+            }
+            break;
           }
           case "startLoading": {
             if (verbose) {
@@ -640,13 +584,13 @@ export abstract class ModelNamespace<
                 verboseLevel,
                 text`
                   Verbose logging is enabled. To hide progress logs, set the "verbose" option to
-                  false in client.llm.getOrLoad.
+                  false in .model().
                 `,
               );
               this.logger.logAtLevel(
                 verboseLevel,
                 text`
-                  Model ${autoIdentifier} is not loaded. Start loading...
+                  Model ${modelKey} is not loaded. Start loading...
                 `,
               );
             }
@@ -674,18 +618,12 @@ export abstract class ModelNamespace<
               this.logger.logAtLevel(
                 verboseLevel,
                 text`
-                  Successfully loaded model ${message.fullPath} in ${Date.now() - startTime}ms
+                  Successfully loaded model ${message.info.modelKey} in ${Date.now() - startTime}ms
                 `,
               );
             }
             resolve(
-              this.createDomainSpecificModel(
-                this.port,
-                message.instanceReference,
-                { identifier: message.identifier, path: message.fullPath },
-                this.validator,
-                this.logger,
-              ),
+              this.createDomainSpecificModel(this.port, message.info, this.validator, this.logger),
             );
           }
         }

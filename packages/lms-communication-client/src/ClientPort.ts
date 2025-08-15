@@ -478,15 +478,20 @@ export class ClientPort<
     for (const openChannel of this.openChannels.values()) {
       openChannel.errored(error);
     }
+    this.openChannels.clear();
     for (const ongoingRpc of this.ongoingRpcs.values()) {
       ongoingRpc.reject(error);
     }
+    this.ongoingRpcs.clear();
     for (const openSignalSubscription of this.openSignalSubscriptions.values()) {
       openSignalSubscription.errored(error);
     }
+    this.openSignalSubscriptions.clear();
     for (const openWritableSignalSubscription of this.openWritableSignalSubscriptions.values()) {
       openWritableSignalSubscription.errored(error);
     }
+    this.openWritableSignalSubscriptions.clear();
+    this.updateOpenCommunicationsCount();
   };
   public async callRpc<TEndpointName extends keyof TRpcEndpoints & string>(
     endpointName: TEndpointName,
@@ -687,6 +692,10 @@ export class ClientPort<
     }, writeUpstream);
     return [signal, setter];
   }
+
+  public async [Symbol.asyncDispose]() {
+    await this.transport[Symbol.asyncDispose]();
+  }
 }
 
 export type InferClientPort<TBackendInterfaceOrCreator> =
@@ -698,7 +707,9 @@ export type InferClientPort<TBackendInterfaceOrCreator> =
     infer TWritableSignalEndpoints
   >
     ? ClientPort<TRpcEndpoints, TChannelEndpoints, TSignalEndpoints, TWritableSignalEndpoints>
-    : TBackendInterfaceOrCreator extends () => BackendInterface<
+    : TBackendInterfaceOrCreator extends (
+          ...ars: Array<any>
+        ) => BackendInterface<
           infer _TContext,
           infer TRpcEndpoints,
           infer TChannelEndpoints,

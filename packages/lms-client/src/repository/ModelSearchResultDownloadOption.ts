@@ -51,7 +51,7 @@ export class ModelSearchResultDownloadOption {
     return this.data.recommended ?? false;
   }
   /**
-   * Download the model. Returns a path that can be used to load the model.
+   * Download the model. Returns the model key which can be used to load the model.
    */
   public async download(opts: DownloadOpts = {}) {
     const stack = getCurrentStack(1);
@@ -91,7 +91,13 @@ export class ModelSearchResultDownloadOption {
       },
       { stack },
     );
-    channel.onError.subscribeOnce(reject);
+    channel.onError.subscribeOnce(error => {
+      if (opts.signal?.aborted) {
+        reject(opts.signal.reason);
+      } else {
+        reject(error);
+      }
+    });
     channel.onClose.subscribeOnce(() => {
       if (opts.signal?.aborted) {
         reject(opts.signal.reason);
