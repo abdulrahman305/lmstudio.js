@@ -1,110 +1,127 @@
 import { type KVConfig, type LLMPredictionConfig } from "@lmstudio/lms-shared-types";
 import { collapseKVStackRaw } from "../KVConfig.js";
-import { globalConfigSchematics, llmPredictionConfigSchematics } from "../schema.js";
-import { maybeFalseNumberToCheckboxNumeric } from "./utils.js";
+import { llmPredictionConfigSchematics } from "../schema.js";
+import { maybeFalseValueToCheckboxValue } from "./utils.js";
 
-export function kvConfigToLLMPredictionConfig(config: KVConfig) {
+interface KvConfigToLLMPredictionConfigOpts {
+  /**
+   * Fills the missing keys passed in with default values
+   */
+  useDefaultsForMissingKeys?: boolean;
+}
+
+export function kvConfigToLLMPredictionConfig(
+  config: KVConfig,
+  { useDefaultsForMissingKeys }: KvConfigToLLMPredictionConfigOpts = {},
+) {
   const result: LLMPredictionConfig = {};
-  const parsed = globalConfigSchematics.parsePartial(config);
-
-  const maxPredictedTokens = parsed.get("llm.prediction.maxPredictedTokens");
+  let parsed;
+  if (useDefaultsForMissingKeys === true) {
+    parsed = llmPredictionConfigSchematics.parse(config);
+  } else {
+    parsed = llmPredictionConfigSchematics.parsePartial(config);
+  }
+  const maxPredictedTokens = parsed.get("maxPredictedTokens");
   if (maxPredictedTokens !== undefined) {
     result.maxTokens = maxPredictedTokens.checked ? maxPredictedTokens.value : false;
   }
-  const temperature = parsed.get("llm.prediction.temperature");
+  const temperature = parsed.get("temperature");
   if (temperature !== undefined) {
     result.temperature = temperature;
   }
 
-  const stopStrings = parsed.get("llm.prediction.stopStrings");
+  const stopStrings = parsed.get("stopStrings");
   if (stopStrings !== undefined) {
     result.stopStrings = stopStrings;
   }
 
-  const toolCallStopStrings = parsed.get("llm.prediction.toolCallStopStrings");
+  const toolCallStopStrings = parsed.get("toolCallStopStrings");
   if (toolCallStopStrings !== undefined) {
     result.toolCallStopStrings = toolCallStopStrings;
   }
 
-  const contextOverflowPolicy = parsed.get("llm.prediction.contextOverflowPolicy");
+  const contextOverflowPolicy = parsed.get("contextOverflowPolicy");
   if (contextOverflowPolicy !== undefined) {
     result.contextOverflowPolicy = contextOverflowPolicy;
   }
 
-  const structured = parsed.get("llm.prediction.structured");
+  const structured = parsed.get("structured");
   if (structured !== undefined) {
     result.structured = structured;
   }
 
-  const tools = parsed.get("llm.prediction.tools");
+  const tools = parsed.get("tools");
   if (tools !== undefined) {
     result.rawTools = tools;
   }
 
-  const toolNaming = parsed.get("llm.prediction.toolNaming");
+  const toolChoice = parsed.get("toolChoice");
+  if (toolChoice !== undefined) {
+    result.toolChoice = toolChoice;
+  }
+
+  const toolNaming = parsed.get("toolNaming");
   if (toolNaming !== undefined) {
     result.toolNaming = toolNaming;
   }
 
-  const topKSampling = parsed.get("llm.prediction.topKSampling");
+  const topKSampling = parsed.get("topKSampling");
   if (topKSampling !== undefined) {
     result.topKSampling = topKSampling;
   }
 
-  const repeatPenalty = parsed.get("llm.prediction.repeatPenalty");
+  const repeatPenalty = parsed.get("repeatPenalty");
   if (repeatPenalty !== undefined) {
     result.repeatPenalty = repeatPenalty.checked ? repeatPenalty.value : false;
   }
 
-  const minPSampling = parsed.get("llm.prediction.minPSampling");
+  const minPSampling = parsed.get("minPSampling");
   if (minPSampling !== undefined) {
     result.minPSampling = minPSampling.checked ? minPSampling.value : false;
   }
 
-  const topPSampling = parsed.get("llm.prediction.topPSampling");
+  const topPSampling = parsed.get("topPSampling");
   if (topPSampling !== undefined) {
     result.topPSampling = topPSampling.checked ? topPSampling.value : false;
   }
 
-  const xtcProbability = parsed.get("llm.prediction.llama.xtcProbability");
+  const xtcProbability = parsed.get("llama.xtcProbability");
   if (xtcProbability !== undefined) {
     result.xtcProbability = xtcProbability.checked ? xtcProbability.value : false;
   }
 
-  const xtcThreshold = parsed.get("llm.prediction.llama.xtcThreshold");
+  const xtcThreshold = parsed.get("llama.xtcThreshold");
   if (xtcThreshold !== undefined) {
     result.xtcThreshold = xtcThreshold.checked ? xtcThreshold.value : false;
   }
 
-  const logProbs = parsed.get("llm.prediction.logProbs");
+  const logProbs = parsed.get("logProbs");
   if (logProbs !== undefined) {
     result.logProbs = logProbs.checked ? logProbs.value : false;
   }
 
-  const cpuThreads = parsed.get("llm.prediction.llama.cpuThreads");
+  const cpuThreads = parsed.get("llama.cpuThreads");
   if (cpuThreads !== undefined) {
     result.cpuThreads = cpuThreads;
   }
 
-  const promptTemplate = parsed.get("llm.prediction.promptTemplate");
+  const promptTemplate = parsed.get("promptTemplate");
   if (promptTemplate !== undefined) {
     result.promptTemplate = promptTemplate;
   }
 
-  const speculativeDecodingDraftModel = parsed.get("llm.prediction.speculativeDecoding.draftModel");
+  const speculativeDecodingDraftModel = parsed.get("speculativeDecoding.draftModel");
   if (speculativeDecodingDraftModel !== undefined) {
     result.draftModel = speculativeDecodingDraftModel;
   }
 
-  const speculativeDecodingDraftTokensExact = parsed.get(
-    "llm.prediction.speculativeDecoding.numDraftTokensExact",
-  );
+  const speculativeDecodingDraftTokensExact = parsed.get("speculativeDecoding.numDraftTokensExact");
   if (speculativeDecodingDraftTokensExact !== undefined) {
     result.speculativeDecodingNumDraftTokensExact = speculativeDecodingDraftTokensExact;
   }
 
   const speculativeDecodingMinContinueDraftingProbability = parsed.get(
-    "llm.prediction.speculativeDecoding.minContinueDraftingProbability",
+    "speculativeDecoding.minContinueDraftingProbability",
   );
   if (speculativeDecodingMinContinueDraftingProbability !== undefined) {
     result.speculativeDecodingMinContinueDraftingProbability =
@@ -112,14 +129,14 @@ export function kvConfigToLLMPredictionConfig(config: KVConfig) {
   }
 
   const speculativeDecodingMinDraftLengthToConsider = parsed.get(
-    "llm.prediction.speculativeDecoding.minDraftLengthToConsider",
+    "speculativeDecoding.minDraftLengthToConsider",
   );
   if (speculativeDecodingMinDraftLengthToConsider !== undefined) {
     result.speculativeDecodingMinDraftLengthToConsider =
       speculativeDecodingMinDraftLengthToConsider;
   }
 
-  const reasoningParsing = parsed.get("llm.prediction.reasoning.parsing");
+  const reasoningParsing = parsed.get("reasoning.parsing");
   if (reasoningParsing !== undefined) {
     result.reasoningParsing = reasoningParsing;
   }
@@ -133,19 +150,20 @@ export function llmPredictionConfigToKVConfig(config: LLMPredictionConfig): KVCo
   const top = llmPredictionConfigSchematics.buildPartialConfig({
     "temperature": config.temperature,
     "contextOverflowPolicy": config.contextOverflowPolicy,
-    "maxPredictedTokens": maybeFalseNumberToCheckboxNumeric(config.maxTokens, 1),
+    "maxPredictedTokens": maybeFalseValueToCheckboxValue(config.maxTokens, 1),
     "stopStrings": config.stopStrings,
     "toolCallStopStrings": config.toolCallStopStrings,
     "structured": config.structured,
     "tools": config.rawTools,
+    "toolChoice": config.toolChoice,
     "toolNaming": config.toolNaming,
     "topKSampling": config.topKSampling,
-    "repeatPenalty": maybeFalseNumberToCheckboxNumeric(config.repeatPenalty, 1.1),
-    "minPSampling": maybeFalseNumberToCheckboxNumeric(config.minPSampling, 0.05),
-    "topPSampling": maybeFalseNumberToCheckboxNumeric(config.topPSampling, 0.95),
-    "llama.xtcProbability": maybeFalseNumberToCheckboxNumeric(config.xtcProbability, 0),
-    "llama.xtcThreshold": maybeFalseNumberToCheckboxNumeric(config.xtcThreshold, 0),
-    "logProbs": maybeFalseNumberToCheckboxNumeric(config.logProbs, 0),
+    "repeatPenalty": maybeFalseValueToCheckboxValue(config.repeatPenalty, 1.1),
+    "minPSampling": maybeFalseValueToCheckboxValue(config.minPSampling, 0.05),
+    "topPSampling": maybeFalseValueToCheckboxValue(config.topPSampling, 0.95),
+    "llama.xtcProbability": maybeFalseValueToCheckboxValue(config.xtcProbability, 0),
+    "llama.xtcThreshold": maybeFalseValueToCheckboxValue(config.xtcThreshold, 0),
+    "logProbs": maybeFalseValueToCheckboxValue(config.logProbs, 0),
     "llama.cpuThreads": config.cpuThreads,
     "promptTemplate": config.promptTemplate,
     "speculativeDecoding.draftModel": config.draftModel,

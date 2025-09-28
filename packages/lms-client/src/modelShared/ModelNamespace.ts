@@ -13,6 +13,7 @@ import {
   logLevelSchema,
   modelQuerySchema,
   reasonableKeyStringSchema,
+  type EstimatedResourcesUsage,
   type KVConfig,
   type LogLevel,
   type ModelDomainType,
@@ -632,11 +633,54 @@ export abstract class ModelNamespace<
     );
 
     channel.onError.subscribeOnce(reject);
-    signal?.addEventListener("abort", () => {
-      channel.send({ type: "cancel" });
-      reject(signal.reason);
-    });
+
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        // If the signal is already aborted, we should reject immediately.
+        channel.send({ type: "cancel" });
+        reject(signal.reason);
+      } else {
+        signal.addEventListener(
+          "abort",
+          () => {
+            channel.send({ type: "cancel" });
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      }
+    }
 
     return await promise;
+  }
+
+  /**
+   * @experimental [EXP-MODEL-USAGE-ESTIMATION] Estimating model usage is experimental and may
+   * change in the future.
+   */
+  public async estimateResourcesUsage(
+    modelKey: string,
+    loadConfig: TLoadModelConfig,
+  ): Promise<EstimatedResourcesUsage> {
+    const stack = getCurrentStack(1);
+    [modelKey, loadConfig] = this.validator.validateMethodParamsOrThrow(
+      `client.${this.namespace}`,
+      "estimateUsage",
+      ["modelKey", "loadConfig"],
+      [reasonableKeyStringSchema, this.loadModelConfigSchema],
+      [modelKey, loadConfig],
+      stack,
+    );
+    return await this.port.callRpc(
+      "estimateModelUsage",
+      {
+        modelKey,
+        loadConfigStack: singleLayerKVConfigStackOf(
+          "apiOverride",
+          this.loadConfigToKVConfig(loadConfig),
+        ),
+      },
+      { stack },
+    );
   }
 }

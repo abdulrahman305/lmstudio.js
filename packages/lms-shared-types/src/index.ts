@@ -1,8 +1,3 @@
-import { z } from "zod";
-
-/** @public */
-export type LogLevel = "debug" | "info" | "warn" | "error";
-export const logLevelSchema = z.enum(["debug", "info", "warn", "error"]);
 export {
   AllowableEnvVarKeys,
   allowableEnvVarKeys,
@@ -91,6 +86,14 @@ export {
   serializeError,
 } from "./Error.js";
 export {
+  EstimatedModelMemoryUsage,
+  EstimatedModelMemoryUsageConfidence,
+  estimatedModelMemoryUsageConfidenceSchema,
+  estimatedModelMemoryUsageSchema,
+  EstimatedResourcesUsage,
+  estimatedResourcesUsageSchema,
+} from "./EstimatedResourcesUsage.js";
+export {
   DocumentParsingLibraryIdentifier,
   documentParsingLibraryIdentifierSchema,
   DocumentParsingOpts,
@@ -105,6 +108,7 @@ export {
 export { FileType, fileTypeSchema } from "./files/FileType.js";
 export {
   convertGPUSettingToGPUSplitConfig,
+  convertGPUSplitConfigToGPUSetting,
   defaultGPUSplitConfig,
   GPUSplitConfig,
   gpuSplitConfigSchema,
@@ -224,6 +228,7 @@ export {
   LLMStructuredPredictionType,
   llmStructuredPredictionTypeSchema,
 } from "./llm/LLMStructuredPredictionSetting.js";
+export { LLMToolChoice, llmToolChoiceSchema } from "./llm/LLMToolChoice.js";
 export {
   LLMTool,
   llmToolArraySchema,
@@ -314,6 +319,7 @@ export {
   promptPreprocessorUpdateSchema,
 } from "./llm/processing/PromptPreprocessorUpdate.js";
 export { TokenSourceIdentifier, tokenSourceIdentifierSchema } from "./llm/TokenSourceIdentifier.js";
+export { LogLevel, logLevelSchema } from "./LogLevel.js";
 export { ModelCompatibilityType, modelCompatibilityTypeSchema } from "./ModelCompatibilityType.js";
 export { ModelDomainType, modelDomainTypeSchema } from "./ModelDomainType.js";
 export {
@@ -379,6 +385,14 @@ export {
   downloadProgressUpdateSchema,
 } from "./repository/DownloadProgressUpdate.js";
 export {
+  HubArtifact,
+  hubArtifactSchema,
+  HubModel,
+  HubModelMetadata,
+  hubModelMetadataSchema,
+  hubModelSchema,
+} from "./repository/HubArtifact.js";
+export {
   ModelSearchOpts,
   modelSearchOptsSchema,
   ModelSearchResultDownloadOptionData,
@@ -414,6 +428,16 @@ export {
   Runtime,
   runtimeSchema,
 } from "./Runtime.js";
+export {
+  ModelFormatName,
+  modelFormatNameSchema,
+  RuntimeEngineInfo,
+  runtimeEngineInfoSchema,
+  RuntimeEngineSpecifier,
+  runtimeEngineSpecifierSchema,
+  SelectedRuntimeEngineMap,
+  selectedRuntimeEngineMapSchema,
+} from "./RuntimeEngine.js";
 export {
   KVConfigSchematicsDeserializationError,
   kvConfigSchematicsDeserializationErrorSchema,

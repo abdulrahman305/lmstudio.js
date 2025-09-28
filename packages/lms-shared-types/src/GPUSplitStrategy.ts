@@ -50,7 +50,12 @@ export const gpuSplitConfigSchema = z.object({
   customRatio: z.array(z.number().min(0)),
 });
 
-export function convertGPUSettingToGPUSplitConfig(gpuSetting?: GPUSetting): GPUSplitConfig {
+export function convertGPUSettingToGPUSplitConfig(
+  gpuSetting?: GPUSetting,
+): GPUSplitConfig | undefined {
+  if (gpuSetting === undefined) {
+    return undefined;
+  }
   return {
     strategy:
       gpuSetting?.splitStrategy == "favorMainGpu"
@@ -59,5 +64,18 @@ export function convertGPUSettingToGPUSplitConfig(gpuSetting?: GPUSetting): GPUS
     disabledGpus: gpuSetting?.disabledGpus ?? [],
     priority: gpuSetting?.mainGpu ? [gpuSetting.mainGpu] : [],
     customRatio: [],
+  };
+}
+
+export function convertGPUSplitConfigToGPUSetting(splitConfig: GPUSplitConfig): GPUSetting {
+  return {
+    splitStrategy:
+      splitConfig.strategy === "priorityOrder"
+        ? "favorMainGpu"
+        : splitConfig.strategy === "evenly"
+          ? "evenly"
+          : undefined,
+    disabledGpus: splitConfig.disabledGpus,
+    mainGpu: splitConfig.priority.length > 0 ? splitConfig.priority[0] : undefined,
   };
 }

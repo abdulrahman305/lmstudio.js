@@ -3,6 +3,14 @@ export {
   llmPredictionConfigToKVConfig,
 } from "./conversion/llmPredictionConfig.js";
 export {
+  kvConfigToLLMLoadModelConfig,
+  llmLoadModelConfigToKVConfig,
+} from "./conversion/llmLoadModelConfig.js";
+export {
+  kvConfigToEmbeddingLoadModelConfig,
+  embeddingLoadModelConfigToKVConfig,
+} from "./conversion/embeddingLoadModelConfig.js";
+export {
   addKVConfigToBaseOfStack,
   addKVConfigToStack,
   collapseKVStack,
@@ -67,6 +75,7 @@ export {
   retrievalSchematics,
   TypedConfigFieldFilter,
   TypedConfigSchematics,
+  customFieldConfigSchematics,
 } from "./schema.js";
 export {
   BasicKVFieldValueTypeLibraryMap,

@@ -20,12 +20,14 @@ import {
 } from "./KVConfig.js";
 import { kvValueTypesLibrary } from "./valueTypes.js";
 
+const VIRTUAL_MODEL_CUSTOM_FIELD_EXTENSION_PREFIX = "ext.virtualModel.customField";
+
 // ---------------------------
 //  1. globalConfigSchematics
 // ---------------------------
 
 export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypesLibrary)
-  .extension("ext.virtualModel.customField")
+  .extension(VIRTUAL_MODEL_CUSTOM_FIELD_EXTENSION_PREFIX)
   .field("envVars", "envVars", {}, {})
   .scope("llm.prediction", builder =>
     builder
@@ -105,6 +107,7 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
           ),
       )
       .field("tools", "toolUse", {}, { type: "none" })
+      .field("toolChoice", "toolChoice", {}, { type: "generic", mode: "auto" })
       .field("toolNaming", "toolNaming", {}, "removeSpecial")
       .field(
         "promptTemplate",
@@ -242,7 +245,7 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
       .field(
         "numCpuExpertLayersRatio",
         "llamaAccelerationOffloadRatio",
-        { machineDependent: true, isExperimental: true, },
+        { machineDependent: true, isExperimental: true },
         "off",
       )
       .scope("llama", builder =>
@@ -373,6 +376,7 @@ export const llmSharedPredictionConfigSchematics = llmPredictionConfigSchematics
   "seed",
   "contextPrefill",
   "tools",
+  "toolChoice",
   "toolNaming",
   "reasoning.*",
 );
@@ -425,7 +429,8 @@ export const llmMistralrsPredictionConfigSchematics = llmSharedPredictionConfigS
 
 export const llmLoadSchematics = globalConfigSchematics
   .scoped("llm.load")
-  .union(globalConfigSchematics.sliced("envVars"));
+  .union(globalConfigSchematics.sliced("envVars"))
+  .union(globalConfigSchematics.scoped("load"));
 
 export const llmSharedLoadConfigSchematics = llmLoadSchematics.sliced(
   "contextLength",
@@ -478,7 +483,9 @@ export const embeddingLlamaLoadConfigSchematics = embeddingSharedLoadConfigSchem
   .union(llamaLoadConfigSchematics);
 
 export const emptyConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypesLibrary).build();
-
+export const customFieldConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypesLibrary)
+  .extension(VIRTUAL_MODEL_CUSTOM_FIELD_EXTENSION_PREFIX)
+  .build();
 // ------------------
 //  3. Utility types
 // ------------------
