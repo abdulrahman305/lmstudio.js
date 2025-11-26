@@ -11,6 +11,13 @@ export {
   ArtifactType,
   artifactTypeSchema,
 } from "./ArtifactManifest.js";
+export { ProjectManifest, projectManifestSchema } from "./ProjectManifest.js";
+export {
+  ProjectYaml,
+  projectYamlSchema,
+  ProjectYamlArtifactEntry,
+  projectYamlArtifactEntrySchema,
+} from "./ProjectYaml.js";
 export {
   ArtifactArtifactDependency,
   artifactArtifactDependencySchema,
@@ -57,6 +64,8 @@ export { ColorPalette, colorPalette, colorPaletteSchema } from "./ColorPalette.j
 export {
   DiagnosticsLogEvent,
   DiagnosticsLogEventData,
+  DiagnosticsLogRuntimeEventData,
+  diagnosticsLogRuntimeEventDataSchema,
   diagnosticsLogEventDataSchema,
   diagnosticsLogEventSchema,
 } from "./diagnostics/DiagnosticsLogEvent.js";
@@ -138,7 +147,6 @@ export {
   kvConfigStackSchema,
 } from "./KVConfig.js";
 export { ContentBlockStyle, contentBlockStyleSchema } from "./llm/ContentBlockStyle.js";
-export { ImageResizeSettings, imageResizeSettingsSchema } from "./llm/ImageResizeSettings.js";
 export {
   LLMApplyPromptTemplateOpts,
   llmApplyPromptTemplateOptsSchema,

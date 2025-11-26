@@ -23,7 +23,12 @@ import { ActResult } from "./ActResult.js";
 import { type LLMPredictionFragmentWithRoundIndex } from "./LLMDynamicHandle.js";
 import { PredictionResult } from "./PredictionResult.js";
 import { SimpleToolCallContext, UnimplementedToolError, type Tool } from "./tool.js";
-import { ToolCallRequestError } from "./ToolCallRequestError.js";
+import {
+  ToolCallRequestError,
+  ToolCallRequestInvalidArgumentsError,
+  ToolCallRequestInvalidFormatError,
+  ToolCallRequestInvalidNameError,
+} from "./ToolCallRequestError.js";
 
 /**
  * Each call uses a globally unique call ID that starts somewhere before the half of the
@@ -238,7 +243,7 @@ class GuardToolCallController {
     throw makeTitledPrettyError(
       `Cannot call ${calledMethodName} after a result has been set`,
       text`
-        This tool call guard has already set a result previously (${this.resultContainer[0].type}). 
+        This tool call guard has already set a result previously (${this.resultContainer[0].type}).
         You cannot set a result more than once.
       `,
       stack,
@@ -505,6 +510,22 @@ export interface LLMActBaseOpts<TPredictionResult> {
    */
   onToolCallRequestDequeued?: (roundIndex: number, callId: number) => void;
   /**
+   * A callback invoked when a tool call succeeds and its result is available.
+   *
+   * This differs from {@link onToolCallResult} in that it is called only when the tool call
+   * succeeds. There are cases where a tool call fails (e.g., an invalid tool name), but
+   * the conversation can continue by providing the model with an error message in the form of a
+   * tool call result. In those cases, this callback is not invoked.
+   *
+   * If you are managing your own context, use {@link onToolCallResult} instead, as it
+   * covers all cases where a tool call result should be added to the context. See its documentation
+   * for more details.
+   *
+   * @experimental [EXP-GRANULAR-ACT] More granular .act status reporting is experimental and may
+   * change in the future
+   */
+  onToolCallSuccess?: (roundIndex: number, callId: number, toolCallResult: ToolCallResult) => void;
+  /**
    * A callback that is called when a tool call result is received. This tool call result should be
    * added to the context if you are managing the context yourself (through onMessage).
    *
@@ -672,6 +693,7 @@ export const llmActBaseOptsSchema = z.object({
   onToolCallRequestFinalized: z.function().optional(),
   onToolCallRequestFailure: z.function().optional(),
   onToolCallRequestDequeued: z.function().optional(),
+  onToolCallSuccess: z.function().optional(),
   onToolCallResult: z.function().optional(),
   guardToolCall: z.function().optional(),
   handleInvalidToolRequest: z.function().optional(),
@@ -1022,9 +1044,10 @@ export async function internalAct<TPredictionResult, TEndPacket>(
         const tool = toolsMap.get(request.name);
         if (tool === undefined) {
           // Tool does not exist.
-          const toolCallRequestError = new ToolCallRequestError(
+          const toolCallRequestError = new ToolCallRequestInvalidNameError(
             `Cannot find tool with name ${request.name}.`,
             rawContent,
+            request.name,
           );
           toolCallPromises.push(
             internalHandleInvalidToolCallRequest(
@@ -1046,7 +1069,12 @@ export async function internalAct<TPredictionResult, TEndPacket>(
           tool.checkParameters(pushedRequest.arguments); // Defaults to empty object
         } catch (error: any) {
           // Failed to parse the parameters
-          const toolCallRequestError = new ToolCallRequestError(error.message, rawContent);
+          const toolCallRequestError = new ToolCallRequestInvalidArgumentsError(
+            error.message,
+            rawContent,
+            request.name,
+            request.arguments,
+          );
           toolCallPromises.push(
             internalHandleInvalidToolCallRequest(
               toolCallRequestError,
@@ -1192,6 +1220,11 @@ export async function internalAct<TPredictionResult, TEndPacket>(
                     content: resultString,
                   },
                 });
+                safeCallCallback(logger, "onToolCallSuccess", baseOpts.onToolCallSuccess, [
+                  predictionsPerformed,
+                  callId,
+                  { toolCallId: request.id, content: resultString },
+                ]);
                 safeCallCallback(logger, "onToolCallResult", baseOpts.onToolCallResult, [
                   predictionsPerformed,
                   callId,
@@ -1209,7 +1242,10 @@ export async function internalAct<TPredictionResult, TEndPacket>(
       },
       handleToolCallGenerationFailed: (error, rawContent) => {
         isGeneratingToolCall = false;
-        const toolCallRequestError = new ToolCallRequestError(error.message, rawContent);
+        const toolCallRequestError = new ToolCallRequestInvalidFormatError(
+          error.message,
+          rawContent,
+        );
         toolCallPromises.push(
           internalHandleInvalidToolCallRequest(
             toolCallRequestError,

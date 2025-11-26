@@ -172,12 +172,14 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
         ),
       )
       .scope("vision", builder =>
-        builder.field(
-          "imageResizeSettings",
-          "imageResizeSettings",
-          {},
-          { maxWidth: 500, maxHeight: 500 },
-        ),
+        builder
+          .field(
+            "userMaxImageDimensionPixels",
+            "checkboxNumeric",
+            { int: true, min: 1 },
+            { checked: true, value: 1024 },
+          )
+          .field("ignoreModelPreferredMaxImageDimension", "boolean", {}, false),
       )
       .scope("llama", builder =>
         builder
@@ -268,12 +270,7 @@ export const globalConfigSchematics = new KVConfigSchematicsBuilder(kvValueTypes
           )
           .field("cpuThreadPoolSize", "numeric", { min: 1, machineDependent: true }, 4)
           .field("evalBatchSize", "numeric", { min: 1, int: true }, 512)
-          .field(
-            "flashAttention",
-            "boolean",
-            { isExperimental: true, warning: "config:flashAttentionWarning" },
-            false,
-          )
+          .field("flashAttention", "boolean", {}, false)
           .field(
             "ropeFrequencyBase",
             "checkboxNumeric",
